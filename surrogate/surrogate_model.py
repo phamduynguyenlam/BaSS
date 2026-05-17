@@ -620,7 +620,7 @@ def _tabpfn_classifier_raw_logits_multi_context(
     if len(classifiers) == 0:
         return [], {
             "query_transform_sec": 0.0,
-            "tensor_build_copy_sec": 0.0,
+            "batch_prepare_sec": 0.0,
             "gpu_forward_sec": 0.0,
             "postprocess_sec": 0.0,
         }
@@ -640,10 +640,11 @@ def _tabpfn_classifier_raw_logits_multi_context(
     ]
     timing = {
         "query_transform_sec": 0.0,
-        "tensor_build_copy_sec": 0.0,
+        "batch_prepare_sec": 0.0,
         "gpu_forward_sec": 0.0,
     }
 
+    batch_prepare_started_at = time.perf_counter()
     flat_items: list[dict[str, Any]] = []
     for batch_idx, (clf, members, query) in enumerate(zip(classifiers, all_members, queries)):
         for estimator_idx, member in enumerate(members):
@@ -684,7 +685,6 @@ def _tabpfn_classifier_raw_logits_multi_context(
         categorical_inds: list[list[int]] = []
         query_lengths: list[int] = []
 
-        tensor_build_started_at = time.perf_counter()
         for local_idx, item in enumerate(group_items):
             member = item["member"]
             x_test = item["x_test"]
@@ -701,11 +701,13 @@ def _tabpfn_classifier_raw_logits_multi_context(
             y_train[:, local_idx] = torch.as_tensor(y_arr, dtype=dtype, device=device)
             categorical_inds.append(member.feature_schema.indices_for(FeatureModality.CATEGORICAL))
             query_lengths.append(int(x_test.shape[0]))
-        timing["tensor_build_copy_sec"] += time.perf_counter() - tensor_build_started_at
 
         kwargs = {}
         if "task_type" in signature(model.forward).parameters:
             kwargs["task_type"] = "multiclass"
+
+        if timing["batch_prepare_sec"] == 0.0:
+            timing["batch_prepare_sec"] = time.perf_counter() - batch_prepare_started_at
 
         gpu_forward_started_at = time.perf_counter()
         with (
@@ -766,8 +768,9 @@ def predict_multi_context_tabpfn(
     if len(surrogates) == 0:
         empty_profile = {
             "query_transform_sec": 0.0,
-            "tensor_build_copy_sec": 0.0,
+            "batch_prepare_sec": 0.0,
             "gpu_forward_sec": 0.0,
+            "postprocess_sec": 0.0,
             "fallback_used": 0.0,
         }
         empty_out = ([], []) if return_std else []
@@ -780,7 +783,7 @@ def predict_multi_context_tabpfn(
         out = ([mean], [std]) if return_std else [mean]
         profile = {
             "query_transform_sec": 0.0,
-            "tensor_build_copy_sec": 0.0,
+            "batch_prepare_sec": 0.0,
             "gpu_forward_sec": 0.0,
             "postprocess_sec": 0.0,
             "fallback_used": 0.0,
@@ -844,7 +847,7 @@ def predict_multi_context_tabpfn(
         out = _predict_multi_context_tabpfn_fallback(surrogates, queries, return_std=return_std)
         timing = {
             "query_transform_sec": 0.0,
-            "tensor_build_copy_sec": 0.0,
+            "batch_prepare_sec": 0.0,
             "gpu_forward_sec": 0.0,
             "postprocess_sec": 0.0,
             "fallback_used": 1.0,
