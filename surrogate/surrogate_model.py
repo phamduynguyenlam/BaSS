@@ -772,6 +772,7 @@ def predict_multi_context_tabpfn(
             "gpu_forward_sec": 0.0,
             "postprocess_sec": 0.0,
             "fallback_used": 0.0,
+            "fallback_reason": "",
         }
         empty_out = ([], []) if return_std else []
         return (empty_out, empty_profile) if return_profile else empty_out
@@ -787,6 +788,7 @@ def predict_multi_context_tabpfn(
             "gpu_forward_sec": 0.0,
             "postprocess_sec": 0.0,
             "fallback_used": 0.0,
+            "fallback_reason": "",
         }
         return (out, profile) if return_profile else out
     try:
@@ -841,9 +843,10 @@ def predict_multi_context_tabpfn(
         std_outputs = [np.stack(parts, axis=1).astype(np.float32) for parts in stds_by_context]
         timing["postprocess_sec"] = time.perf_counter() - postprocess_started_at
         timing["fallback_used"] = 0.0
+        timing["fallback_reason"] = ""
         out = (mean_outputs, std_outputs) if return_std else mean_outputs
         return (out, timing) if return_profile else out
-    except _TabPFNMultiContextUnavailableError:
+    except _TabPFNMultiContextUnavailableError as exc:
         out = _predict_multi_context_tabpfn_fallback(surrogates, queries, return_std=return_std)
         timing = {
             "query_transform_sec": 0.0,
@@ -851,6 +854,7 @@ def predict_multi_context_tabpfn(
             "gpu_forward_sec": 0.0,
             "postprocess_sec": 0.0,
             "fallback_used": 1.0,
+            "fallback_reason": str(exc),
         }
         return (out, timing) if return_profile else out
 

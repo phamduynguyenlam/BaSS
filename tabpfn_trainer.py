@@ -350,6 +350,9 @@ def _predict_multi_context_logged(
     total_points = sum(int(np.asarray(query).shape[0]) for query in queries)
     max_dim = max(int(np.asarray(query).shape[1]) if np.asarray(query).ndim == 2 else 0 for query in queries)
     objective_contexts = sum(int(surrogate.n_objectives) for surrogate in surrogates)
+    fallback_reason = str(profile.get("fallback_reason", "") or "")
+    if len(fallback_reason) > 180:
+        fallback_reason = fallback_reason[:177] + "..."
     if log is not None:
         log(
             f"[TabPFN sync] {batch_label} | "
@@ -363,6 +366,7 @@ def _predict_multi_context_logged(
             f"gpu_forward_sec={float(profile.get('gpu_forward_sec', 0.0)):.3f} | "
             f"postprocess_sec={float(profile.get('postprocess_sec', 0.0)):.3f} | "
             f"fallback_used={int(round(float(profile.get('fallback_used', 0.0))))} | "
+            f"fallback_reason={fallback_reason if fallback_reason else '-'} | "
             f"time_sec={elapsed:.3f}"
         )
     return outputs
