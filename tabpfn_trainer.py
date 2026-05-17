@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
+    parser.add_argument("--num_thread", type=int, default=12)
     parser.add_argument("--updates_per_epoch", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--rollout_device", type=str, default="cpu")
@@ -343,9 +344,16 @@ def _predict_multi_context_logged(
     log,
     batch_label: str,
     candidate_wait_sec: float = 0.0,
+    num_threads: int = 12,
 ):
     started_at = time.perf_counter()
-    outputs, profile = predict_multi_context(surrogates, queries, return_std=return_std, return_profile=True)
+    outputs, profile = predict_multi_context(
+        surrogates,
+        queries,
+        return_std=return_std,
+        return_profile=True,
+        num_threads=int(num_threads),
+    )
     elapsed = time.perf_counter() - started_at
     total_points = sum(int(np.asarray(query).shape[0]) for query in queries)
     max_dim = max(int(np.asarray(query).shape[1]) if np.asarray(query).ndim == 2 else 0 for query in queries)
@@ -386,6 +394,7 @@ def _refresh_offspring_synchronized(
         raise TypeError("Synchronized TabPFN rollout requires every environment surrogate to be TabPFNMinMaxSurrogate.")
 
     nsga_steps = max(1, int(envs[0].cfg["surrogate_nsga_steps"]))
+    num_threads = max(1, int(envs[0].cfg.get("num_thread", 12)))
     algorithms = [_setup_synchronized_nsga2(env) for env in envs]
 
     for gen_idx in range(nsga_steps):
@@ -400,6 +409,7 @@ def _refresh_offspring_synchronized(
             log=log,
             batch_label=f"{phase_label} | gen={gen_idx + 1:03d}/{nsga_steps:03d} | mode=mean",
             candidate_wait_sec=candidate_wait_sec,
+            num_threads=num_threads,
         )
         for infill, pred_mean in zip(infills, pred_means):
             infill.set("F", np.asarray(pred_mean, dtype=np.float64))
@@ -426,6 +436,7 @@ def _refresh_offspring_synchronized(
         log=log,
         batch_label=f"{phase_label} | sigma | mode=std",
         candidate_wait_sec=0.0,
+        num_threads=num_threads,
     )
 
     for env, offspring_x, offspring_y, offspring_sigma in zip(envs, result_xs, result_ys, result_stds):
@@ -641,6 +652,7 @@ def train_disc_ddqn_tabpfn(
     surrogate_model="tabpfn",
     training_set=1,
     surrogate_nsga_steps=100,
+    num_thread=12,
     updates_per_epoch=None,
     device=None,
     rollout_device="cpu",
@@ -657,6 +669,7 @@ def train_disc_ddqn_tabpfn(
     cfg.training_set = int(training_set)
     cfg.heldout_problem = str(problem_name).upper()
     cfg.surrogate_nsga_steps = int(surrogate_nsga_steps)
+    cfg.num_thread = max(1, int(num_thread))
     if updates_per_epoch is not None:
         cfg.updates_per_epoch = int(updates_per_epoch)
     if device is not None:
@@ -736,6 +749,7 @@ def train_disc_ddqn_tabpfn(
         f"policy={cfg.policy_mode} | "
         f"surrogate={cfg.surrogate_model} | "
         f"sampling_backend={sampling_backend} | "
+        f"num_thread={cfg.num_thread} | "
         f"epochs={cfg.train_iters} | "
         f"sur_steps={cfg.surrogate_nsga_steps} | "
         f"updates_per_epoch={cfg.updates_per_epoch} | "
@@ -1045,6 +1059,7 @@ if __name__ == "__main__":
         surrogate_model=str(args.surrogate_model),
         training_set=int(args.training_set),
         surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+        num_thread=int(args.num_thread),
         updates_per_epoch=args.updates_per_epoch,
         device=args.device,
         rollout_device=str(args.rollout_device),

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import argparse
-import timepyth
+import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front
-from surrogate.surrogate_model import fit_tabpfn_surrogate
+from surrogate.surrogate_model import fit_tabpfn_surrogate, predict_multi_context
+from trainer import build_training_env_specs
 
 
 DEFAULT_PROBLEMS = [
@@ -32,12 +34,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--problem", type=str, default="ZDT1", choices=DEFAULT_PROBLEMS)
     parser.add_argument("--dim", type=int, default=30)
+    parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
+    parser.add_argument("--num_requests", type=int, default=24)
     parser.add_argument("--archive_size", type=int, default=80)
     parser.add_argument("--offspring_size", type=int, default=80)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=20)
+    parser.add_argument("--num_thread", type=int, default=12)
     parser.add_argument("--mutation_sigma", type=float, default=0.12)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--save_plot", type=str, default=None)
     return parser.parse_args()
 
@@ -251,8 +256,110 @@ def run_surrogate_nsga2_with_logging(
     return offspring_x, offspring_pred
 
 
+def _broadcast_bounds(problem, dim: int) -> tuple[np.ndarray, np.ndarray]:
+    lower = np.asarray(problem.lower, dtype=np.float32).reshape(-1)
+    upper = np.asarray(problem.upper, dtype=np.float32).reshape(-1)
+    if lower.size == 1:
+        lower = np.repeat(lower, int(dim))
+    if upper.size == 1:
+        upper = np.repeat(upper, int(dim))
+    return lower, upper
+
+
+def run_multi_context_parallel_demo(args: argparse.Namespace) -> None:
+    run_started = time.perf_counter()
+    env_specs = build_training_env_specs(args.problem, int(args.training_set))
+    env_specs = env_specs[: int(args.num_requests)]
+    if len(env_specs) == 0:
+        raise ValueError("No environment specs available for multi-context demo.")
+
+    archives_x: list[np.ndarray] = []
+    archives_y: list[np.ndarray] = []
+    surrogates = []
+    queries: list[np.ndarray] = []
+
+    fit_started = time.perf_counter()
+    for env_idx, spec in enumerate(env_specs):
+        problem = make_problem(str(spec["problem_name"]), dim=int(spec["dim"]))
+        archive_x = latin_hypercube_sample(
+            lower=problem.lower,
+            upper=problem.upper,
+            n_samples=int(args.archive_size),
+            dim=int(spec["dim"]),
+            seed=int(args.seed) + 1000 * env_idx,
+        )
+        archive_y = np.asarray(problem.evaluate(archive_x), dtype=np.float32)
+        lower, upper = _broadcast_bounds(problem, int(spec["dim"]))
+        query_x = latin_hypercube_sample(
+            lower=lower,
+            upper=upper,
+            n_samples=int(args.offspring_size),
+            dim=int(spec["dim"]),
+            seed=int(args.seed) + 1000 * env_idx + 1,
+        )
+
+        surrogate = fit_tabpfn_surrogate(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            device=str(args.device),
+        )
+        archives_x.append(archive_x)
+        archives_y.append(archive_y)
+        surrogates.append(surrogate)
+        queries.append(query_x)
+    fit_elapsed = time.perf_counter() - fit_started
+
+    infer_started = time.perf_counter()
+    (pred_means, pred_stds), profile = predict_multi_context(
+        surrogates,
+        queries,
+        return_std=True,
+        return_profile=True,
+        num_threads=int(args.num_thread),
+    )
+    infer_elapsed = time.perf_counter() - infer_started
+
+    total_points = sum(int(query.shape[0]) for query in queries)
+    max_dim = max(int(query.shape[1]) for query in queries)
+    total_objective_contexts = sum(int(archive_y.shape[1]) for archive_y in archives_y)
+
+    print(
+        f"Parallel TabPFN demo | heldout={args.problem} | training_set={args.training_set} | "
+        f"requests={len(env_specs)} | device={args.device} | num_thread={int(args.num_thread)} | "
+        f"points={total_points} | max_dim={max_dim} | "
+        f"objective_contexts={total_objective_contexts}"
+    )
+    print(
+        f"Fit time: {fit_elapsed:.3f}s | "
+        f"Infer time: {infer_elapsed:.3f}s | "
+        f"query_transform_sec={float(profile.get('query_transform_sec', 0.0)):.3f} | "
+        f"batch_prepare_sec={float(profile.get('batch_prepare_sec', 0.0)):.3f} | "
+        f"gpu_forward_sec={float(profile.get('gpu_forward_sec', 0.0)):.3f} | "
+        f"postprocess_sec={float(profile.get('postprocess_sec', 0.0)):.3f} | "
+        f"fallback_used={int(round(float(profile.get('fallback_used', 0.0))))}"
+    )
+    fallback_reason = str(profile.get("fallback_reason", "") or "")
+    if fallback_reason:
+        print(f"Fallback reason: {fallback_reason}")
+
+    for env_idx, (spec, archive_y, mean_y, std_y) in enumerate(zip(env_specs, archives_y, pred_means, pred_stds), start=1):
+        print(
+            f"[{env_idx:02d}] {str(spec['problem_name']).upper()}-{int(spec['dim'])}D | "
+            f"archive_obj={int(archive_y.shape[1])} | "
+            f"query_shape={tuple(queries[env_idx - 1].shape)} | "
+            f"mean_shape={tuple(np.asarray(mean_y).shape)} | "
+            f"std_shape={tuple(np.asarray(std_y).shape)}"
+        )
+
+    print(f"Runtime total: {time.perf_counter() - run_started:.3f}s")
+
+
 def main() -> None:
     args = parse_args()
+    if int(args.num_requests) > 1:
+        run_multi_context_parallel_demo(args)
+        return
+
     run_started = time.perf_counter()
 
     problem = make_problem(args.problem, dim=int(args.dim))
@@ -280,12 +387,7 @@ def main() -> None:
         device=str(args.device),
     )
 
-    lower = np.asarray(problem.lower, dtype=np.float32).reshape(-1)
-    upper = np.asarray(problem.upper, dtype=np.float32).reshape(-1)
-    if lower.size == 1:
-        lower = np.repeat(lower, int(args.dim))
-    if upper.size == 1:
-        upper = np.repeat(upper, int(args.dim))
+    lower, upper = _broadcast_bounds(problem, int(args.dim))
 
     offspring_x, offspring_pred = run_surrogate_nsga2_with_logging(
         surrogate=surrogate,

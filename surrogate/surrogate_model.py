@@ -3,7 +3,9 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import time
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -451,6 +453,7 @@ class TabPFNMinMaxSurrogate:
         self._x_rng: np.ndarray | None = None
         self._y_min: np.ndarray | None = None
         self._y_rng: np.ndarray | None = None
+        self._n_train_samples: int | None = None
         self._bins: TabPFNBins | None = None
         self._model: TabPFNSurrogate | None = None
 
@@ -498,6 +501,7 @@ class TabPFNMinMaxSurrogate:
         if y_arr.shape[1] != self.n_objectives:
             raise ValueError(f"y must have {self.n_objectives} objectives, got {y_arr.shape[1]}.")
 
+        self._n_train_samples = int(x_arr.shape[0])
         self._x_min, self._x_rng = self._minmax_fit(x_arr)
         self._y_min, self._y_rng = self._minmax_fit(y_arr)
 
@@ -533,14 +537,9 @@ class TabPFNMinMaxSurrogate:
 
     @property
     def n_train_samples(self) -> int:
-        if self._model is None:
+        if self._n_train_samples is None:
             raise RuntimeError("TabPFNMinMaxSurrogate is not fit yet.")
-        classifier = self._model.objectives[0].model
-        n_train_samples = getattr(classifier, "n_train_samples_", None)
-        if n_train_samples is not None:
-            return int(n_train_samples)
-        members = _get_tabpfn_ensemble_members(classifier)
-        return int(np.asarray(members[0].X_train).shape[0])
+        return int(self._n_train_samples)
 
     @property
     def n_input_features(self) -> int:
@@ -558,8 +557,9 @@ class TabPFNMinMaxSurrogate:
         queries: Sequence[np.ndarray],
         *,
         return_std: bool = False,
+        num_threads: int = 12,
     ) -> list[np.ndarray] | tuple[list[np.ndarray], list[np.ndarray]]:
-        return predict_multi_context_tabpfn(surrogates, queries, return_std=return_std)
+        return predict_multi_context_tabpfn(surrogates, queries, return_std=return_std, num_threads=num_threads)
 
 
 class _TabPFNMultiContextUnavailableError(RuntimeError):
@@ -607,153 +607,28 @@ def _predict_multi_context_tabpfn_fallback(
     return (means, stds) if return_std else means
 
 
-def _tabpfn_classifier_raw_logits_multi_context(
-    classifiers: Sequence[Any],
-    queries: Sequence[np.ndarray],
-) -> tuple[list[torch.Tensor], dict[str, float]]:
-    import time
-    from inspect import signature
+def _predict_single_tabpfn_objective_threaded(
+    *,
+    surrogate: TabPFNMinMaxSurrogate,
+    normalized_query: np.ndarray,
+    objective_idx: int,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    if surrogate._model is None:
+        raise RuntimeError("TabPFNMinMaxSurrogate is not fit yet.")
 
-    from tabpfn.preprocessing.datamodel import FeatureModality  # type: ignore
-    from tabpfn.utils import get_autocast_context  # type: ignore
+    objective = surrogate._model.objectives[int(objective_idx)]
+    predict_started_at = time.perf_counter()
+    probs = objective.predict_proba(normalized_query)
+    predict_elapsed = time.perf_counter() - predict_started_at
 
-    if len(classifiers) == 0:
-        return [], {
-            "query_transform_sec": 0.0,
-            "batch_prepare_sec": 0.0,
-            "gpu_forward_sec": 0.0,
-            "postprocess_sec": 0.0,
-        }
-
-    batch_size = int(len(classifiers))
-    all_members = [_get_tabpfn_ensemble_members(clf) for clf in classifiers]
-    n_estimators = int(len(all_members[0]))
-    if not all(len(members) == n_estimators for members in all_members):
-        raise ValueError("All TabPFN classifiers in a batched forward must expose the same number of ensemble members.")
-    train_sizes = [int(np.asarray(members[0].X_train).shape[0]) for members in all_members]
-    if len(set(train_sizes)) != 1:
-        raise ValueError(f"All contexts in a batched TabPFN forward must have the same number of train rows, got {train_sizes}.")
-    train_rows = int(train_sizes[0])
-
-    raw_logits_per_context: list[list[torch.Tensor | None]] = [
-        [None for _ in range(n_estimators)] for _ in range(batch_size)
-    ]
-    timing = {
-        "query_transform_sec": 0.0,
-        "batch_prepare_sec": 0.0,
-        "gpu_forward_sec": 0.0,
-    }
-
-    batch_prepare_started_at = time.perf_counter()
-    flat_items: list[dict[str, Any]] = []
-    for batch_idx, (clf, members, query) in enumerate(zip(classifiers, all_members, queries)):
-        for estimator_idx, member in enumerate(members):
-            transform_started_at = time.perf_counter()
-            x_test = np.asarray(member.transform_X_test(query), dtype=np.float32)
-            timing["query_transform_sec"] += time.perf_counter() - transform_started_at
-            flat_items.append(
-                {
-                    "batch_idx": int(batch_idx),
-                    "estimator_idx": int(estimator_idx),
-                    "classifier": clf,
-                    "member": member,
-                    "config": member.config,
-                    "x_test": x_test,
-                }
-            )
-
-    model_groups: dict[int, list[dict[str, Any]]] = {}
-    for item in flat_items:
-        model_groups.setdefault(int(item["config"]._model_index), []).append(item)
-
-    for model_index, group_items in model_groups.items():
-        ref_clf = group_items[0]["classifier"]
-        model = ref_clf.models_[model_index]
-        device = ref_clf.devices_[0]
-        model = model.to(device)
-        dtype = ref_clf.forced_inference_dtype_ if ref_clf.forced_inference_dtype_ is not None else torch.float32
-
-        max_query_rows = max(int(item["x_test"].shape[0]) for item in group_items)
-        max_features = max(
-            max(int(np.asarray(item["member"].X_train).shape[1]), int(item["x_test"].shape[1]))
-            for item in group_items
-        )
-        local_batch_size = int(len(group_items))
-
-        x_full = torch.zeros((train_rows + max_query_rows, local_batch_size, max_features), dtype=dtype, device=device)
-        y_train = torch.full((train_rows, local_batch_size), float("nan"), dtype=dtype, device=device)
-        categorical_inds: list[list[int]] = []
-        query_lengths: list[int] = []
-
-        for local_idx, item in enumerate(group_items):
-            member = item["member"]
-            x_test = item["x_test"]
-            x_train = np.asarray(member.X_train, dtype=np.float32)
-            x_full[:train_rows, local_idx, : x_train.shape[1]] = torch.as_tensor(x_train, dtype=dtype, device=device)
-            if x_test.shape[0] > 0:
-                x_full[train_rows : train_rows + x_test.shape[0], local_idx, : x_test.shape[1]] = torch.as_tensor(
-                    x_test,
-                    dtype=dtype,
-                    device=device,
-                )
-
-            y_arr = np.asarray(member.y_train, dtype=np.float32).reshape(-1)
-            y_train[:, local_idx] = torch.as_tensor(y_arr, dtype=dtype, device=device)
-            categorical_inds.append(member.feature_schema.indices_for(FeatureModality.CATEGORICAL))
-            query_lengths.append(int(x_test.shape[0]))
-
-        kwargs = {}
-        if "task_type" in signature(model.forward).parameters:
-            kwargs["task_type"] = "multiclass"
-
-        if timing["batch_prepare_sec"] == 0.0:
-            timing["batch_prepare_sec"] = time.perf_counter() - batch_prepare_started_at
-
-        gpu_forward_started_at = time.perf_counter()
-        with (
-            get_autocast_context(device, enabled=bool(ref_clf.use_autocast_)),
-            torch.inference_mode(),
-        ):
-            output = model(
-                x_full,
-                y_train,
-                only_return_standard_out=True,
-                categorical_inds=categorical_inds,
-                **kwargs,
-            )
-        timing["gpu_forward_sec"] += time.perf_counter() - gpu_forward_started_at
-
-        if output.ndim != 3:
-            raise ValueError(f"Expected TabPFN model output with 3 dims, got shape={tuple(output.shape)}.")
-
-        for local_idx, item in enumerate(group_items):
-            clf = item["classifier"]
-            config = item["config"]
-            batch_idx = int(item["batch_idx"])
-            estimator_idx = int(item["estimator_idx"])
-            q_len = int(query_lengths[local_idx])
-            logits = output[:q_len, local_idx, :]
-            if config.class_permutation is None:
-                logits = logits[:, : clf.n_classes_]
-            else:
-                if len(config.class_permutation) != clf.n_classes_:
-                    use_perm = np.arange(clf.n_classes_)
-                    use_perm[: len(config.class_permutation)] = config.class_permutation
-                else:
-                    use_perm = config.class_permutation
-                logits = logits[:, use_perm]
-            raw_logits_per_context[batch_idx][estimator_idx] = logits
-
-    stacked_outputs: list[torch.Tensor] = []
-    for batch_idx, logits_per_estimator in enumerate(raw_logits_per_context):
-        if any(logits is None for logits in logits_per_estimator):
-            missing = [idx for idx, logits in enumerate(logits_per_estimator) if logits is None]
-            raise RuntimeError(
-                f"Missing TabPFN logits for classifier batch index {batch_idx} at estimator indices {missing}."
-            )
-        stacked_outputs.append(torch.stack([logits for logits in logits_per_estimator if logits is not None], dim=0))
-
-    return stacked_outputs, timing
+    postprocess_started_at = time.perf_counter()
+    mean_norm, std_norm = tabpfn_probs_to_mean_std(probs, objective.bins, normalize=True)
+    y_min = float(surrogate._y_min[objective_idx])  # type: ignore[index]
+    y_rng = float(surrogate._y_rng[objective_idx])  # type: ignore[index]
+    mean = (y_min + mean_norm * y_rng).astype(np.float32)
+    std = (std_norm * y_rng).astype(np.float32)
+    postprocess_elapsed = time.perf_counter() - postprocess_started_at
+    return mean, std, float(predict_elapsed), float(postprocess_elapsed)
 
 
 def predict_multi_context_tabpfn(
@@ -762,6 +637,7 @@ def predict_multi_context_tabpfn(
     *,
     return_std: bool = False,
     return_profile: bool = False,
+    num_threads: int = 12,
 ) -> list[np.ndarray] | tuple[list[np.ndarray], list[np.ndarray]] | tuple[Any, dict[str, float]]:
     if len(surrogates) != len(queries):
         raise ValueError(f"surrogates and queries must have the same length, got {len(surrogates)} and {len(queries)}.")
@@ -792,13 +668,13 @@ def predict_multi_context_tabpfn(
         }
         return (out, profile) if return_profile else out
     try:
-        import time
-
         train_sizes = [int(surrogate.n_train_samples) for surrogate in surrogates]
         if len(set(train_sizes)) != 1:
             raise ValueError(f"All TabPFN multi-context surrogates must have the same number of train samples, got {train_sizes}.")
 
+        normalize_started_at = time.perf_counter()
         normalized_queries = [surrogate._norm_x(np.asarray(query, dtype=np.float32)) for surrogate, query in zip(surrogates, queries)]
+        query_transform_sec = time.perf_counter() - normalize_started_at
         n_contexts = int(len(surrogates))
         max_objectives = max(int(surrogate.n_objectives) for surrogate in surrogates)
         objective_mask = np.zeros((n_contexts, max_objectives), dtype=bool)
@@ -808,45 +684,60 @@ def predict_multi_context_tabpfn(
         means_by_context: list[list[np.ndarray]] = [[] for _ in range(n_contexts)]
         stds_by_context: list[list[np.ndarray]] = [[] for _ in range(n_contexts)]
 
+        batch_prepare_started_at = time.perf_counter()
         flat_context_ids: list[int] = []
         flat_objective_ids: list[int] = []
-        flat_classifiers: list[Any] = []
-        flat_queries: list[np.ndarray] = []
+        task_specs: list[tuple[int, int, TabPFNMinMaxSurrogate, np.ndarray]] = []
         for context_idx in range(n_contexts):
             for objective_idx in range(max_objectives):
                 if not objective_mask[context_idx, objective_idx]:
                     continue
                 flat_context_ids.append(int(context_idx))
                 flat_objective_ids.append(int(objective_idx))
-                flat_classifiers.append(surrogates[context_idx]._model.objectives[objective_idx].model)  # type: ignore[union-attr]
-                flat_queries.append(normalized_queries[context_idx])
+                task_specs.append(
+                    (
+                        int(context_idx),
+                        int(objective_idx),
+                        surrogates[context_idx],
+                        normalized_queries[context_idx],
+                    )
+                )
+        batch_prepare_sec = time.perf_counter() - batch_prepare_started_at
 
-        raw_logits_by_flat_pair, timing = _tabpfn_classifier_raw_logits_multi_context(flat_classifiers, flat_queries)
-        postprocess_started_at = time.perf_counter()
-
-        for flat_idx, (classifier, raw_logits, context_idx, objective_idx) in enumerate(
-            zip(flat_classifiers, raw_logits_by_flat_pair, flat_context_ids, flat_objective_ids)
-        ):
-            del flat_idx
-            surrogate = surrogates[context_idx]
-            probs = classifier.logits_to_probabilities(raw_logits)
-            probs_np = probs.float().detach().cpu().numpy()
-            probs_np = classifier._maybe_reweight_probas(probs_np)
-            bins = surrogate._model.objectives[objective_idx].bins  # type: ignore[union-attr]
-            mean_norm, std_norm = tabpfn_probs_to_mean_std(probs_np, bins, normalize=True)
-            y_min = float(surrogate._y_min[objective_idx])  # type: ignore[index]
-            y_rng = float(surrogate._y_rng[objective_idx])  # type: ignore[index]
-            means_by_context[context_idx].append((y_min + mean_norm * y_rng).astype(np.float32))
-            stds_by_context[context_idx].append((std_norm * y_rng).astype(np.float32))
+        predict_sum_sec = 0.0
+        postprocess_sum_sec = 0.0
+        max_workers = max(1, min(int(num_threads), int(len(task_specs))))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    _predict_single_tabpfn_objective_threaded,
+                    surrogate=surrogate,
+                    normalized_query=normalized_query,
+                    objective_idx=objective_idx,
+                )
+                for _, objective_idx, surrogate, normalized_query in task_specs
+            ]
+            for future_idx, future in enumerate(futures):
+                mean_obj, std_obj, predict_elapsed, postprocess_elapsed = future.result()
+                context_idx = int(flat_context_ids[future_idx])
+                means_by_context[context_idx].append(np.asarray(mean_obj, dtype=np.float32))
+                stds_by_context[context_idx].append(np.asarray(std_obj, dtype=np.float32))
+                predict_sum_sec += float(predict_elapsed)
+                postprocess_sum_sec += float(postprocess_elapsed)
 
         mean_outputs = [np.stack(parts, axis=1).astype(np.float32) for parts in means_by_context]
         std_outputs = [np.stack(parts, axis=1).astype(np.float32) for parts in stds_by_context]
-        timing["postprocess_sec"] = time.perf_counter() - postprocess_started_at
-        timing["fallback_used"] = 0.0
-        timing["fallback_reason"] = ""
+        timing = {
+            "query_transform_sec": float(query_transform_sec),
+            "batch_prepare_sec": float(batch_prepare_sec),
+            "gpu_forward_sec": float(predict_sum_sec),
+            "postprocess_sec": float(postprocess_sum_sec),
+            "fallback_used": 0.0,
+            "fallback_reason": "",
+        }
         out = (mean_outputs, std_outputs) if return_std else mean_outputs
         return (out, timing) if return_profile else out
-    except _TabPFNMultiContextUnavailableError as exc:
+    except Exception as exc:
         out = _predict_multi_context_tabpfn_fallback(surrogates, queries, return_std=return_std)
         timing = {
             "query_transform_sec": 0.0,
@@ -854,7 +745,7 @@ def predict_multi_context_tabpfn(
             "gpu_forward_sec": 0.0,
             "postprocess_sec": 0.0,
             "fallback_used": 1.0,
-            "fallback_reason": str(exc),
+            "fallback_reason": f"{type(exc).__name__}: {exc}",
         }
         return (out, timing) if return_profile else out
 
@@ -865,8 +756,15 @@ def predict_multi_context(
     *,
     return_std: bool = False,
     return_profile: bool = False,
+    num_threads: int = 12,
 ) -> list[np.ndarray] | tuple[list[np.ndarray], list[np.ndarray]] | tuple[Any, dict[str, float]]:
-    return predict_multi_context_tabpfn(surrogates, queries, return_std=return_std, return_profile=return_profile)
+    return predict_multi_context_tabpfn(
+        surrogates,
+        queries,
+        return_std=return_std,
+        return_profile=return_profile,
+        num_threads=num_threads,
+    )
 
 
 from surrogate.gp import GPSurrogateModel, fit_gp_surrogates, predict_with_gp_mean, predict_with_gp_std
