@@ -622,6 +622,7 @@ def _tabpfn_classifier_raw_logits_multi_context(
             "query_transform_sec": 0.0,
             "tensor_build_copy_sec": 0.0,
             "gpu_forward_sec": 0.0,
+            "postprocess_sec": 0.0,
         }
 
     batch_size = int(len(classifiers))
@@ -781,10 +782,13 @@ def predict_multi_context_tabpfn(
             "query_transform_sec": 0.0,
             "tensor_build_copy_sec": 0.0,
             "gpu_forward_sec": 0.0,
+            "postprocess_sec": 0.0,
             "fallback_used": 0.0,
         }
         return (out, profile) if return_profile else out
     try:
+        import time
+
         train_sizes = [int(surrogate.n_train_samples) for surrogate in surrogates]
         if len(set(train_sizes)) != 1:
             raise ValueError(f"All TabPFN multi-context surrogates must have the same number of train samples, got {train_sizes}.")
@@ -813,6 +817,7 @@ def predict_multi_context_tabpfn(
                 flat_queries.append(normalized_queries[context_idx])
 
         raw_logits_by_flat_pair, timing = _tabpfn_classifier_raw_logits_multi_context(flat_classifiers, flat_queries)
+        postprocess_started_at = time.perf_counter()
 
         for flat_idx, (classifier, raw_logits, context_idx, objective_idx) in enumerate(
             zip(flat_classifiers, raw_logits_by_flat_pair, flat_context_ids, flat_objective_ids)
@@ -831,6 +836,7 @@ def predict_multi_context_tabpfn(
 
         mean_outputs = [np.stack(parts, axis=1).astype(np.float32) for parts in means_by_context]
         std_outputs = [np.stack(parts, axis=1).astype(np.float32) for parts in stds_by_context]
+        timing["postprocess_sec"] = time.perf_counter() - postprocess_started_at
         timing["fallback_used"] = 0.0
         out = (mean_outputs, std_outputs) if return_std else mean_outputs
         return (out, timing) if return_profile else out
@@ -840,6 +846,7 @@ def predict_multi_context_tabpfn(
             "query_transform_sec": 0.0,
             "tensor_build_copy_sec": 0.0,
             "gpu_forward_sec": 0.0,
+            "postprocess_sec": 0.0,
             "fallback_used": 1.0,
         }
         return (out, timing) if return_profile else out

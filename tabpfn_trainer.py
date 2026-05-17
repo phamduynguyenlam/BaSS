@@ -361,6 +361,7 @@ def _predict_multi_context_logged(
             f"query_transform_sec={float(profile.get('query_transform_sec', 0.0)):.3f} | "
             f"tensor_build_copy_sec={float(profile.get('tensor_build_copy_sec', 0.0)):.3f} | "
             f"gpu_forward_sec={float(profile.get('gpu_forward_sec', 0.0)):.3f} | "
+            f"postprocess_sec={float(profile.get('postprocess_sec', 0.0)):.3f} | "
             f"fallback_used={int(round(float(profile.get('fallback_used', 0.0))))} | "
             f"time_sec={elapsed:.3f}"
         )
