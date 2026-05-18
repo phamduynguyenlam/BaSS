@@ -735,8 +735,11 @@ def _predict_proba_multi_context_batched_public(
         if "task_type" in signature(core_model.forward).parameters:
             kwargs["task_type"] = "multiclass"
 
+        use_cuda_timing = str(device).startswith("cuda")
+        if use_cuda_timing:
+            torch.cuda.synchronize(device=device)
         gpu_started_at = time.perf_counter()
-        with torch.autocast(device_type="cuda", enabled=str(device).startswith("cuda")):
+        with torch.autocast(device_type="cuda", enabled=use_cuda_timing):
             with torch.inference_mode():
                 output = core_model(
                     x_full,
@@ -744,6 +747,8 @@ def _predict_proba_multi_context_batched_public(
                     only_return_standard_out=True,
                     **kwargs,
                 )
+        if use_cuda_timing:
+            torch.cuda.synchronize(device=device)
         gpu_forward_sec += time.perf_counter() - gpu_started_at
 
         if output.ndim != 3:

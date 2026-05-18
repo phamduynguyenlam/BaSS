@@ -56,6 +56,7 @@ def parse_args():
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--rollout_device", type=str, default="cpu")
     parser.add_argument("--surrogate_device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--ray", action="store_true")
     return parser.parse_args()
 
@@ -446,6 +447,7 @@ def rollout_episode_batch_synchronized(
     log=None,
 ):
     device = str(cfg_dict.get("rollout_device", "cpu"))
+    debug_log = log if bool(cfg_dict.get("debug", False)) else None
 
     agent = Disc(
         hidden_dim=cfg_dict["hidden_dim"],
@@ -471,7 +473,7 @@ def rollout_episode_batch_synchronized(
     for env in envs:
         env.reset_without_offspring()
 
-    _refresh_offspring_synchronized(envs, log=log, phase_label="reset")
+    _refresh_offspring_synchronized(envs, log=debug_log, phase_label="reset")
 
     states = [env._build_state() for env in envs]
     total_rewards = [0.0 for _ in envs]
@@ -506,7 +508,7 @@ def rollout_episode_batch_synchronized(
 
         active_envs = [env for env, done in zip(envs, step_dones) if not done]
         if active_envs:
-            _refresh_offspring_synchronized(active_envs, log=log, phase_label=f"step={active_envs[0].t:03d}")
+            _refresh_offspring_synchronized(active_envs, log=debug_log, phase_label=f"step={active_envs[0].t:03d}")
 
         next_states = []
         for idx, (env, state, action, reward, done) in enumerate(zip(envs, prev_states, actions, step_rewards, step_dones)):
@@ -652,6 +654,7 @@ def train_disc_ddqn_tabpfn(
     device=None,
     rollout_device="cpu",
     surrogate_device="cuda",
+    debug=False,
     use_ray=False,
 ):
     cfg = TrainConfig()
@@ -665,6 +668,7 @@ def train_disc_ddqn_tabpfn(
     cfg.heldout_problem = str(problem_name).upper()
     cfg.surrogate_nsga_steps = int(surrogate_nsga_steps)
     cfg.num_thread = max(1, int(num_thread))
+    cfg.debug = bool(debug)
     if updates_per_epoch is not None:
         cfg.updates_per_epoch = int(updates_per_epoch)
     if device is not None:
@@ -1058,5 +1062,6 @@ if __name__ == "__main__":
         device=args.device,
         rollout_device=str(args.rollout_device),
         surrogate_device=str(args.surrogate_device),
+        debug=bool(args.debug),
         use_ray=bool(args.ray),
     )
