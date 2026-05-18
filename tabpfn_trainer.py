@@ -5,7 +5,7 @@ import copy
 import os
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -344,7 +344,6 @@ def _predict_multi_context_logged(
     log,
     batch_label: str,
     candidate_wait_sec: float = 0.0,
-    num_threads: int = 12,
 ):
     started_at = time.perf_counter()
     outputs, profile = predict_multi_context(
@@ -352,7 +351,6 @@ def _predict_multi_context_logged(
         queries,
         return_std=return_std,
         return_profile=True,
-        num_threads=int(num_threads),
     )
     elapsed = time.perf_counter() - started_at
     total_points = sum(int(np.asarray(query).shape[0]) for query in queries)
@@ -394,7 +392,6 @@ def _refresh_offspring_synchronized(
         raise TypeError("Synchronized TabPFN rollout requires every environment surrogate to be TabPFNMinMaxSurrogate.")
 
     nsga_steps = max(1, int(envs[0].cfg["surrogate_nsga_steps"]))
-    num_threads = max(1, int(envs[0].cfg.get("num_thread", 12)))
     algorithms = [_setup_synchronized_nsga2(env) for env in envs]
 
     for gen_idx in range(nsga_steps):
@@ -409,7 +406,6 @@ def _refresh_offspring_synchronized(
             log=log,
             batch_label=f"{phase_label} | gen={gen_idx + 1:03d}/{nsga_steps:03d} | mode=mean",
             candidate_wait_sec=candidate_wait_sec,
-            num_threads=num_threads,
         )
         for infill, pred_mean in zip(infills, pred_means):
             infill.set("F", np.asarray(pred_mean, dtype=np.float64))
@@ -436,7 +432,6 @@ def _refresh_offspring_synchronized(
         log=log,
         batch_label=f"{phase_label} | sigma | mode=std",
         candidate_wait_sec=0.0,
-        num_threads=num_threads,
     )
 
     for env, offspring_x, offspring_y, offspring_sigma in zip(envs, result_xs, result_ys, result_stds):
@@ -749,7 +744,6 @@ def train_disc_ddqn_tabpfn(
         f"policy={cfg.policy_mode} | "
         f"surrogate={cfg.surrogate_model} | "
         f"sampling_backend={sampling_backend} | "
-        f"num_thread={cfg.num_thread} | "
         f"epochs={cfg.train_iters} | "
         f"sur_steps={cfg.surrogate_nsga_steps} | "
         f"updates_per_epoch={cfg.updates_per_epoch} | "

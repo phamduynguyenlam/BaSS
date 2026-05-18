@@ -5,7 +5,6 @@ import os
 import sys
 import time
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -305,6 +304,10 @@ class TabPFNObjectiveSurrogate:
         self.model = model
         self.bins = TabPFNBins.from_edges(bin_edges)
         self._fit_classes: np.ndarray | None = None
+        self._fit_x: np.ndarray | None = None
+        self._fit_y_bins: np.ndarray | None = None
+        self._fit_class_permutation: np.ndarray | None = None
+        self._fit_model_index: int = 0
 
     def fit(self, x: np.ndarray, y: np.ndarray) -> "TabPFNObjectiveSurrogate":
         x_arr = np.asarray(x, dtype=np.float32)
@@ -321,8 +324,16 @@ class TabPFNObjectiveSurrogate:
             raise TypeError("Wrapped model does not implement fit().")
         self.model.fit(x_arr, y_bins)
 
+        self._fit_x = np.asarray(x_arr, dtype=np.float32).copy()
+        self._fit_y_bins = np.asarray(y_bins, dtype=np.float32).copy()
         classes = getattr(self.model, "classes_", None)
         self._fit_classes = None if classes is None else np.asarray(classes, dtype=np.int64).reshape(-1)
+        ensemble_configs = getattr(self.model, "ensemble_configs_", None)
+        if ensemble_configs:
+            config0 = ensemble_configs[0]
+            class_permutation = getattr(config0, "class_permutation", None)
+            self._fit_class_permutation = None if class_permutation is None else np.asarray(class_permutation, dtype=np.int64)
+            self._fit_model_index = int(getattr(config0, "_model_index", 0))
         return self
 
     def predict_proba(self, x: np.ndarray) -> np.ndarray:
@@ -420,7 +431,7 @@ def build_tabpfn_surrogate(
 
     models: list[Any] = []
     for _ in range(int(n_objectives)):
-        base = TabPFNClassifier(device=tabpfn_device)
+        base = TabPFNClassifier(device=tabpfn_device, n_estimators=1)
         if use_many_class_extension:
             try:
                 from tabpfn_extensions.manyclass_classifier import ManyClassClassifier  # type: ignore
@@ -607,28 +618,158 @@ def _predict_multi_context_tabpfn_fallback(
     return (means, stds) if return_std else means
 
 
-def _predict_single_tabpfn_objective_threaded(
-    *,
-    surrogate: TabPFNMinMaxSurrogate,
-    normalized_query: np.ndarray,
-    objective_idx: int,
-) -> tuple[np.ndarray, np.ndarray, float, float]:
-    if surrogate._model is None:
-        raise RuntimeError("TabPFNMinMaxSurrogate is not fit yet.")
+def _predict_proba_multi_context_batched_public(
+    objectives: Sequence[TabPFNObjectiveSurrogate],
+    queries: Sequence[np.ndarray],
+) -> tuple[list[np.ndarray], dict[str, float]]:
+    from inspect import signature
 
-    objective = surrogate._model.objectives[int(objective_idx)]
-    predict_started_at = time.perf_counter()
-    probs = objective.predict_proba(normalized_query)
-    predict_elapsed = time.perf_counter() - predict_started_at
+    if len(objectives) != len(queries):
+        raise ValueError(f"objectives and queries must have the same length, got {len(objectives)} and {len(queries)}.")
+    if len(objectives) == 0:
+        return [], {
+            "query_transform_sec": 0.0,
+            "batch_prepare_sec": 0.0,
+            "gpu_forward_sec": 0.0,
+            "postprocess_sec": 0.0,
+        }
 
-    postprocess_started_at = time.perf_counter()
-    mean_norm, std_norm = tabpfn_probs_to_mean_std(probs, objective.bins, normalize=True)
-    y_min = float(surrogate._y_min[objective_idx])  # type: ignore[index]
-    y_rng = float(surrogate._y_rng[objective_idx])  # type: ignore[index]
-    mean = (y_min + mean_norm * y_rng).astype(np.float32)
-    std = (std_norm * y_rng).astype(np.float32)
-    postprocess_elapsed = time.perf_counter() - postprocess_started_at
-    return mean, std, float(predict_elapsed), float(postprocess_elapsed)
+    train_sizes = []
+    for objective in objectives:
+        if objective._fit_x is None or objective._fit_y_bins is None:
+            raise RuntimeError("TabPFNObjectiveSurrogate is not fit yet.")
+        train_sizes.append(int(objective._fit_x.shape[0]))
+    if len(set(train_sizes)) != 1:
+        raise ValueError(f"All batched TabPFN objectives must have the same number of train rows, got {train_sizes}.")
+    train_rows = int(train_sizes[0])
+
+    group_prepare_started_at = time.perf_counter()
+    grouped_items: dict[int, list[dict[str, Any]]] = {}
+    for batch_idx, (objective, query) in enumerate(zip(objectives, queries)):
+        model_index = int(getattr(objective, "_fit_model_index", 0))
+        grouped_items.setdefault(model_index, []).append(
+            {
+                "batch_idx": int(batch_idx),
+                "objective": objective,
+                "query": np.asarray(query, dtype=np.float32),
+            }
+        )
+
+    probs_by_batch: list[np.ndarray | None] = [None for _ in objectives]
+    query_transform_sec = 0.0
+    batch_prepare_sec = time.perf_counter() - group_prepare_started_at
+    gpu_forward_sec = 0.0
+    postprocess_sec = 0.0
+
+    for model_index, group_items in grouped_items.items():
+        ref_objective = group_items[0]["objective"]
+        classifier = ref_objective.model
+        if not hasattr(classifier, "model_") and not hasattr(classifier, "models_"):
+            raise RuntimeError(f"TabPFN classifier does not expose model_ / models_ for batched public forward: {type(classifier).__name__}.")
+
+        if hasattr(classifier, "models_"):
+            core_model = classifier.models_[int(model_index)]
+        else:
+            core_model = classifier.model_
+
+        device = classifier.devices_[0]
+        core_model = core_model.to(device)
+        dtype = classifier.forced_inference_dtype_ if classifier.forced_inference_dtype_ is not None else torch.float32
+
+        max_query_rows = max(int(item["query"].shape[0]) for item in group_items)
+        max_features = max(
+            max(int(item["objective"]._fit_x.shape[1]), int(item["query"].shape[1]))  # type: ignore[union-attr]
+            for item in group_items
+        )
+        local_batch_size = int(len(group_items))
+
+        x_full = torch.zeros((train_rows + max_query_rows, local_batch_size, max_features), dtype=dtype, device=device)
+        y_full = torch.zeros((train_rows, local_batch_size), dtype=dtype, device=device)
+        query_lengths: list[int] = []
+
+        fill_started_at = time.perf_counter()
+        for local_idx, item in enumerate(group_items):
+            objective = item["objective"]
+            x_train = np.asarray(objective._fit_x, dtype=np.float32)
+            y_bins = np.asarray(objective._fit_y_bins, dtype=np.float32).reshape(-1)
+            query = np.asarray(item["query"], dtype=np.float32)
+
+            x_full[:train_rows, local_idx, : x_train.shape[1]] = torch.as_tensor(x_train, dtype=dtype, device=device)
+            if query.shape[0] > 0:
+                x_full[train_rows : train_rows + query.shape[0], local_idx, : query.shape[1]] = torch.as_tensor(
+                    query,
+                    dtype=dtype,
+                    device=device,
+                )
+            y_full[:, local_idx] = torch.as_tensor(y_bins, dtype=dtype, device=device)
+            query_lengths.append(int(query.shape[0]))
+        batch_prepare_sec += time.perf_counter() - fill_started_at
+
+        kwargs = {}
+        if "task_type" in signature(core_model.forward).parameters:
+            kwargs["task_type"] = "multiclass"
+
+        gpu_started_at = time.perf_counter()
+        with torch.autocast(device_type="cuda", enabled=str(device).startswith("cuda")):
+            with torch.inference_mode():
+                output = core_model(
+                    x_full,
+                    y_full,
+                    only_return_standard_out=True,
+                    **kwargs,
+                )
+        gpu_forward_sec += time.perf_counter() - gpu_started_at
+
+        if output.ndim != 3:
+            raise ValueError(f"Expected core TabPFN output with 3 dims, got shape={tuple(output.shape)}.")
+
+        postprocess_started_at = time.perf_counter()
+        for local_idx, item in enumerate(group_items):
+            objective = item["objective"]
+            classifier = objective.model
+            q_len = int(query_lengths[local_idx])
+            logits = output[:q_len, local_idx, :]
+
+            class_permutation = objective._fit_class_permutation
+            if class_permutation is None:
+                logits = logits[:, : classifier.n_classes_]
+            else:
+                if len(class_permutation) != classifier.n_classes_:
+                    use_perm = np.arange(classifier.n_classes_, dtype=np.int64)
+                    use_perm[: len(class_permutation)] = class_permutation
+                else:
+                    use_perm = class_permutation
+                logits = logits[:, use_perm]
+
+            probs_partial = classifier.logits_to_probabilities(logits.unsqueeze(0))
+            probs_partial_np = probs_partial.float().detach().cpu().numpy()
+            probs_partial_np = classifier._maybe_reweight_probas(probs_partial_np)
+
+            fit_classes = objective._fit_classes
+            if fit_classes is None:
+                probs_full = np.asarray(probs_partial_np, dtype=np.float32)
+            elif probs_partial_np.shape[1] == objective.bins.k:
+                probs_full = np.asarray(probs_partial_np, dtype=np.float32)
+            else:
+                probs_full = np.zeros((probs_partial_np.shape[0], objective.bins.k), dtype=np.float32)
+                for col, cls_id in enumerate(fit_classes.tolist()):
+                    if 0 <= int(cls_id) < objective.bins.k and col < probs_partial_np.shape[1]:
+                        probs_full[:, int(cls_id)] = probs_partial_np[:, col]
+
+            probs_by_batch[int(item["batch_idx"])] = probs_full.astype(np.float32)
+        postprocess_sec += time.perf_counter() - postprocess_started_at
+        query_transform_sec += 0.0
+
+    if any(probs is None for probs in probs_by_batch):
+        missing = [idx for idx, probs in enumerate(probs_by_batch) if probs is None]
+        raise RuntimeError(f"Missing batched TabPFN probabilities for objective batch indices {missing}.")
+
+    return [np.asarray(probs, dtype=np.float32) for probs in probs_by_batch if probs is not None], {
+        "query_transform_sec": float(query_transform_sec),
+        "batch_prepare_sec": float(batch_prepare_sec),
+        "gpu_forward_sec": float(gpu_forward_sec),
+        "postprocess_sec": float(postprocess_sec),
+    }
 
 
 def predict_multi_context_tabpfn(
@@ -639,6 +780,7 @@ def predict_multi_context_tabpfn(
     return_profile: bool = False,
     num_threads: int = 12,
 ) -> list[np.ndarray] | tuple[list[np.ndarray], list[np.ndarray]] | tuple[Any, dict[str, float]]:
+    del num_threads
     if len(surrogates) != len(queries):
         raise ValueError(f"surrogates and queries must have the same length, got {len(surrogates)} and {len(queries)}.")
     if len(surrogates) == 0:
@@ -684,57 +826,39 @@ def predict_multi_context_tabpfn(
         means_by_context: list[list[np.ndarray]] = [[] for _ in range(n_contexts)]
         stds_by_context: list[list[np.ndarray]] = [[] for _ in range(n_contexts)]
 
-        batch_prepare_started_at = time.perf_counter()
         flat_context_ids: list[int] = []
         flat_objective_ids: list[int] = []
-        task_specs: list[tuple[int, int, TabPFNMinMaxSurrogate, np.ndarray]] = []
+        objective_tasks: list[TabPFNObjectiveSurrogate] = []
+        objective_queries: list[np.ndarray] = []
         for context_idx in range(n_contexts):
             for objective_idx in range(max_objectives):
                 if not objective_mask[context_idx, objective_idx]:
                     continue
                 flat_context_ids.append(int(context_idx))
                 flat_objective_ids.append(int(objective_idx))
-                task_specs.append(
-                    (
-                        int(context_idx),
-                        int(objective_idx),
-                        surrogates[context_idx],
-                        normalized_queries[context_idx],
-                    )
-                )
-        batch_prepare_sec = time.perf_counter() - batch_prepare_started_at
+                objective_tasks.append(surrogates[context_idx]._model.objectives[objective_idx])  # type: ignore[union-attr]
+                objective_queries.append(normalized_queries[context_idx])
 
-        predict_sum_sec = 0.0
-        postprocess_sum_sec = 0.0
-        max_workers = max(1, min(int(num_threads), int(len(task_specs))))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(
-                    _predict_single_tabpfn_objective_threaded,
-                    surrogate=surrogate,
-                    normalized_query=normalized_query,
-                    objective_idx=objective_idx,
-                )
-                for _, objective_idx, surrogate, normalized_query in task_specs
-            ]
-            for future_idx, future in enumerate(futures):
-                mean_obj, std_obj, predict_elapsed, postprocess_elapsed = future.result()
-                context_idx = int(flat_context_ids[future_idx])
-                means_by_context[context_idx].append(np.asarray(mean_obj, dtype=np.float32))
-                stds_by_context[context_idx].append(np.asarray(std_obj, dtype=np.float32))
-                predict_sum_sec += float(predict_elapsed)
-                postprocess_sum_sec += float(postprocess_elapsed)
+        probs_by_task, timing = _predict_proba_multi_context_batched_public(objective_tasks, objective_queries)
+        timing["query_transform_sec"] += float(query_transform_sec)
+
+        outer_postprocess_started_at = time.perf_counter()
+        for task_idx, probs in enumerate(probs_by_task):
+            context_idx = int(flat_context_ids[task_idx])
+            objective_idx = int(flat_objective_ids[task_idx])
+            objective = objective_tasks[task_idx]
+            mean_norm, std_norm = tabpfn_probs_to_mean_std(probs, objective.bins, normalize=True)
+            surrogate = surrogates[context_idx]
+            y_min = float(surrogate._y_min[objective_idx])  # type: ignore[index]
+            y_rng = float(surrogate._y_rng[objective_idx])  # type: ignore[index]
+            means_by_context[context_idx].append((y_min + mean_norm * y_rng).astype(np.float32))
+            stds_by_context[context_idx].append((std_norm * y_rng).astype(np.float32))
+        timing["postprocess_sec"] += time.perf_counter() - outer_postprocess_started_at
 
         mean_outputs = [np.stack(parts, axis=1).astype(np.float32) for parts in means_by_context]
         std_outputs = [np.stack(parts, axis=1).astype(np.float32) for parts in stds_by_context]
-        timing = {
-            "query_transform_sec": float(query_transform_sec),
-            "batch_prepare_sec": float(batch_prepare_sec),
-            "gpu_forward_sec": float(predict_sum_sec),
-            "postprocess_sec": float(postprocess_sum_sec),
-            "fallback_used": 0.0,
-            "fallback_reason": "",
-        }
+        timing["fallback_used"] = 0.0
+        timing["fallback_reason"] = ""
         out = (mean_outputs, std_outputs) if return_std else mean_outputs
         return (out, timing) if return_profile else out
     except Exception as exc:
