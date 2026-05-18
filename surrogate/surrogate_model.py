@@ -297,6 +297,32 @@ def tabpfn_probs_to_mean_std(
     return mean.astype(np.float32), std.astype(np.float32)
 
 
+def _apply_balanced_softmax_probs(
+    logits: torch.Tensor,
+    y_train_bins: np.ndarray,
+    *,
+    n_classes_full: int,
+    active_classes: np.ndarray | None = None,
+) -> np.ndarray:
+    probs_tensor = torch.softmax(logits, dim=-1)
+    probs = probs_tensor.detach().cpu().numpy().astype(np.float32)
+
+    y_arr = np.asarray(y_train_bins, dtype=np.int64).reshape(-1)
+    class_counts = np.bincount(y_arr, minlength=int(n_classes_full)).astype(np.float32)
+    class_counts = np.maximum(class_counts, 1.0)
+    total_samples = float(max(int(y_arr.size), 1))
+    weights_full = total_samples / (float(int(n_classes_full)) * class_counts)
+    if active_classes is None:
+        weights = weights_full[: probs.shape[1]]
+    else:
+        active = np.asarray(active_classes, dtype=np.int64).reshape(-1)
+        weights = weights_full[active]
+
+    reweighted = probs * weights.reshape(1, -1)
+    denom = np.maximum(reweighted.sum(axis=-1, keepdims=True), 1e-12)
+    return (reweighted / denom).astype(np.float32)
+
+
 class TabPFNObjectiveSurrogate:
     """Single-objective TabPFN surrogate producing (mean, std) via bin probabilities."""
 
@@ -431,7 +457,7 @@ def build_tabpfn_surrogate(
 
     models: list[Any] = []
     for _ in range(int(n_objectives)):
-        base = TabPFNClassifier(device=tabpfn_device, n_estimators=1)
+        base = TabPFNClassifier(device=tabpfn_device, n_estimators=8)
         if use_many_class_extension:
             try:
                 from tabpfn_extensions.manyclass_classifier import ManyClassClassifier  # type: ignore
@@ -741,11 +767,13 @@ def _predict_proba_multi_context_batched_public(
                     use_perm = class_permutation
                 logits = logits[:, use_perm]
 
-            probs_partial = classifier.logits_to_probabilities(logits.unsqueeze(0))
-            probs_partial_np = probs_partial.float().detach().cpu().numpy()
-            probs_partial_np = classifier._maybe_reweight_probas(probs_partial_np)
-
             fit_classes = objective._fit_classes
+            probs_partial_np = _apply_balanced_softmax_probs(
+                logits,
+                np.asarray(objective._fit_y_bins, dtype=np.float32),
+                n_classes_full=int(objective.bins.k),
+                active_classes=fit_classes,
+            )
             if fit_classes is None:
                 probs_full = np.asarray(probs_partial_np, dtype=np.float32)
             elif probs_partial_np.shape[1] == objective.bins.k:
