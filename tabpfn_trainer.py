@@ -345,6 +345,7 @@ def _predict_multi_context_logged(
     log,
     batch_label: str,
     candidate_wait_sec: float = 0.0,
+    gen_cycle_started_at: float | None = None,
 ):
     started_at = time.perf_counter()
     outputs, profile = predict_multi_context(
@@ -354,6 +355,7 @@ def _predict_multi_context_logged(
         return_profile=True,
     )
     elapsed = time.perf_counter() - started_at
+    gen_cycle_sec = (time.perf_counter() - gen_cycle_started_at) if gen_cycle_started_at is not None else 0.0
     total_points = sum(int(np.asarray(query).shape[0]) for query in queries)
     max_dim = max(int(np.asarray(query).shape[1]) if np.asarray(query).ndim == 2 else 0 for query in queries)
     objective_contexts = sum(int(surrogate.n_objectives) for surrogate in surrogates)
@@ -368,6 +370,7 @@ def _predict_multi_context_logged(
             f"dim={max_dim} | "
             f"objective_contexts={objective_contexts} | "
             f"candidate_wait_sec={candidate_wait_sec:.3f} | "
+            f"gen_cycle_sec={gen_cycle_sec:.3f} | "
             f"query_transform_sec={float(profile.get('query_transform_sec', 0.0)):.3f} | "
             f"batch_prepare_sec={float(profile.get('batch_prepare_sec', 0.0)):.3f} | "
             f"gpu_forward_sec={float(profile.get('gpu_forward_sec', 0.0)):.3f} | "
@@ -396,7 +399,8 @@ def _refresh_offspring_synchronized(
     algorithms = [_setup_synchronized_nsga2(env) for env in envs]
 
     for gen_idx in range(nsga_steps):
-        candidate_wait_started_at = time.perf_counter()
+        generation_started_at = time.perf_counter()
+        candidate_wait_started_at = generation_started_at
         infills = [algorithm.ask() for algorithm in algorithms]
         candidate_wait_sec = time.perf_counter() - candidate_wait_started_at
         queries = [np.asarray(infill.get("X"), dtype=np.float32) for infill in infills]
@@ -407,6 +411,7 @@ def _refresh_offspring_synchronized(
             log=log,
             batch_label=f"{phase_label} | gen={gen_idx + 1:03d}/{nsga_steps:03d} | mode=mean",
             candidate_wait_sec=candidate_wait_sec,
+            gen_cycle_started_at=generation_started_at if log is not None else None,
         )
         for infill, pred_mean in zip(infills, pred_means):
             infill.set("F", np.asarray(pred_mean, dtype=np.float64))
