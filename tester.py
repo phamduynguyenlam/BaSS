@@ -209,10 +209,18 @@ def build_disc(
     return disc
 
 
-def sample_offspring_index(logits: torch.Tensor) -> tuple[int, np.ndarray]:
-    probs = torch.softmax(logits, dim=-1)
-    idx = int(torch.distributions.Categorical(probs=probs).sample().item())
-    return idx, probs.detach().cpu().numpy().reshape(-1)
+def select_offspring_index_epsilon_greedy(logits: torch.Tensor, epsilon: float = 0.05) -> tuple[int, np.ndarray]:
+    logits_1d = logits.reshape(-1)
+    q_values = logits_1d.detach().cpu().numpy().astype(np.float32)
+    n_actions = int(q_values.shape[0])
+    if n_actions <= 0:
+        raise ValueError("No offspring candidates available for epsilon-greedy selection.")
+
+    if float(np.random.random()) < float(epsilon):
+        idx = int(np.random.randint(0, n_actions))
+    else:
+        idx = int(np.argmax(q_values))
+    return idx, q_values
 
 
 @dataclass
@@ -444,10 +452,11 @@ def main() -> None:
                 progress=progress,
                 lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
                 upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
-                decode_type="greedy",
+                decode_type="epsilon_greedy",
+                epsilon=0.05,
             )
             logits = out["logits"].reshape(-1)
-        selected_idx, probs = sample_offspring_index(logits)
+        selected_idx, q_values = select_offspring_index_epsilon_greedy(logits, epsilon=0.05)
         selected_x = offspring_x[selected_idx : selected_idx + 1]
         selected_pred = offspring_pred[selected_idx]
         selected_true = np.asarray(problem.evaluate(selected_x), dtype=np.float32)
