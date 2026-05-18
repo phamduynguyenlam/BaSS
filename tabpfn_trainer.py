@@ -488,6 +488,7 @@ def rollout_episode_batch_synchronized(
     while not all(dones):
         actions: list[int] = []
         prev_states = states
+        agent_forward_started_at = time.perf_counter()
         for state in prev_states:
             with torch.no_grad():
                 out = agent(
@@ -503,6 +504,13 @@ def rollout_episode_batch_synchronized(
                     epsilon=epsilon,
                 )
             actions.append(select_action_from_output(out))
+        agent_forward_sec = time.perf_counter() - agent_forward_started_at
+        if debug_log is not None and len(envs) > 0:
+            debug_log(
+                f"[DISC sync] step={envs[0].t + 1:03d} | "
+                f"envs={len(prev_states)} | "
+                f"agent_forward_sec={agent_forward_sec:.3f}"
+            )
 
         step_dones: list[bool] = []
         step_rewards: list[float] = []
