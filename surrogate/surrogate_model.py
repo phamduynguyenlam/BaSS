@@ -703,6 +703,37 @@ def _predict_proba_multi_context_batched_public(
 ) -> tuple[list[np.ndarray], dict[str, float]]:
     from inspect import signature
 
+    def _debug_print_batch(
+        *,
+        enabled: bool,
+        label: str,
+        device: Any,
+        x_shape: tuple[int, ...],
+        y_shape: tuple[int, ...],
+        local_batch_size: int,
+        query_rows: int,
+        train_rows: int,
+        feature_dim: int,
+    ) -> None:
+        if not enabled:
+            return
+        msg = (
+            f"[TabPFN batch debug] {label} | device={device} | "
+            f"x_full={x_shape} | y_full={y_shape} | "
+            f"local_batch={int(local_batch_size)} | train_rows={int(train_rows)} | "
+            f"query_rows={int(query_rows)} | feature_dim={int(feature_dim)}"
+        )
+        if str(device).startswith("cuda"):
+            try:
+                free_bytes, total_bytes = torch.cuda.mem_get_info(device=device)
+                msg += (
+                    f" | vram_free_gb={float(free_bytes) / (1024**3):.3f} "
+                    f"| vram_total_gb={float(total_bytes) / (1024**3):.3f}"
+                )
+            except Exception as exc:
+                msg += f" | vram_info_error={type(exc).__name__}: {exc}"
+        print(msg)
+
     def _logits_to_full_probs(
         *,
         logits: torch.Tensor,
@@ -843,6 +874,7 @@ def _predict_proba_multi_context_batched_public(
     for group_items in grouped_items.values():
         ref_item = group_items[0]
         classifier = ref_item["classifier"]
+        debug_enabled = bool(getattr(ref_item["objective"], "debug", False))
         if not hasattr(classifier, "model_") and not hasattr(classifier, "models_"):
             raise RuntimeError(f"TabPFN classifier does not expose model_ / models_ for batched public forward: {type(classifier).__name__}.")
 
@@ -883,6 +915,17 @@ def _predict_proba_multi_context_batched_public(
                     x_full,
                     item["member"].gpu_preprocessor,
                     num_train_rows=int(x_train.shape[0]),
+                )
+                _debug_print_batch(
+                    enabled=debug_enabled,
+                    label="gpu_preprocessed_member",
+                    device=device,
+                    x_shape=tuple(int(v) for v in x_full.shape),
+                    y_shape=tuple(int(v) for v in y_full.shape),
+                    local_batch_size=1,
+                    query_rows=int(query.shape[0]),
+                    train_rows=int(x_train.shape[0]),
+                    feature_dim=int(x_train.shape[1]),
                 )
                 batch_prepare_sec += time.perf_counter() - fill_started_at
 
@@ -945,6 +988,17 @@ def _predict_proba_multi_context_batched_public(
                 y_full[:, local_idx] = torch.as_tensor(y_train, dtype=dtype, device=device)
                 query_lengths.append(int(query.shape[0]))
             batch_prepare_sec += time.perf_counter() - fill_started_at
+            _debug_print_batch(
+                enabled=debug_enabled,
+                label="batched_member_group",
+                device=device,
+                x_shape=tuple(int(v) for v in x_full.shape),
+                y_shape=tuple(int(v) for v in y_full.shape),
+                local_batch_size=int(local_batch_size),
+                query_rows=int(max_query_rows),
+                train_rows=int(train_rows),
+                feature_dim=int(feature_dim),
+            )
 
             if use_cuda_timing:
                 torch.cuda.synchronize(device=device)
