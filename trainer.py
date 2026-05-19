@@ -187,6 +187,7 @@ def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y):
             archive_y=np.asarray(archive_y, dtype=np.float32),
             device=surrogate_device,
             n_estimators=int(cfg_dict.get("ensemble_model", 8)),
+            debug=bool(cfg_dict.get("debug", False)),
         )
 
     raise ValueError(f"Unsupported surrogate_model: {surrogate_name}")

@@ -208,6 +208,7 @@ def fit_tabpfn_surrogate(
     archive_y: np.ndarray,
     device: str,
     n_estimators: int = 8,
+    debug: bool = False,
 ) -> Any:
     archive_x = np.asarray(archive_x, dtype=np.float32)
     archive_y = np.asarray(archive_y, dtype=np.float32)
@@ -215,6 +216,7 @@ def fit_tabpfn_surrogate(
         n_objectives=int(archive_y.shape[1]),
         tabpfn_device=str(device),
         n_estimators=int(n_estimators),
+        debug=bool(debug),
     ).fit(archive_x, archive_y)
 
 
@@ -333,9 +335,10 @@ def _apply_balanced_softmax_probs(
 class TabPFNObjectiveSurrogate:
     """Single-objective TabPFN surrogate producing (mean, std) via bin probabilities."""
 
-    def __init__(self, model: Any, bin_edges: np.ndarray | Sequence[float]):
+    def __init__(self, model: Any, bin_edges: np.ndarray | Sequence[float], *, debug: bool = False):
         self.model = model
         self.bins = TabPFNBins.from_edges(bin_edges)
+        self.debug = bool(debug)
         self._fit_classes: np.ndarray | None = None
         self._fit_x: np.ndarray | None = None
         self._fit_y_bins: np.ndarray | None = None
@@ -343,6 +346,7 @@ class TabPFNObjectiveSurrogate:
         self._fit_model_index: int = 0
 
     def fit(self, x: np.ndarray, y: np.ndarray) -> "TabPFNObjectiveSurrogate":
+        t0 = time.perf_counter()
         x_arr = np.asarray(x, dtype=np.float32)
         y_arr = np.asarray(y, dtype=np.float32).reshape(-1)
         if x_arr.ndim != 2:
@@ -353,20 +357,38 @@ class TabPFNObjectiveSurrogate:
             )
 
         y_bins = discretize_targets_to_bins(y_arr, self.bins.edges)
+        t_discretize = time.perf_counter()
         if not hasattr(self.model, "fit"):
             raise TypeError("Wrapped model does not implement fit().")
         self.model.fit(x_arr, y_bins)
+        t_clf_fit = time.perf_counter()
 
         self._fit_x = np.asarray(x_arr, dtype=np.float32).copy()
         self._fit_y_bins = np.asarray(y_bins, dtype=np.float32).copy()
         classes = getattr(self.model, "classes_", None)
         self._fit_classes = None if classes is None else np.asarray(classes, dtype=np.int64).reshape(-1)
+        ensemble_members_count = 0
+        try:
+            ensemble_members_count = len(_get_tabpfn_ensemble_members(self.model))
+        except Exception:
+            pass
         ensemble_configs = getattr(self.model, "ensemble_configs_", None)
         if ensemble_configs:
             config0 = ensemble_configs[0]
             class_permutation = getattr(config0, "class_permutation", None)
             self._fit_class_permutation = None if class_permutation is None else np.asarray(class_permutation, dtype=np.int64)
             self._fit_model_index = int(getattr(config0, "_model_index", 0))
+        t_cache = time.perf_counter()
+        if self.debug:
+            print(
+                f"[TabPFN obj fit] rows={x_arr.shape[0]} dim={x_arr.shape[1]} "
+                f"| bins={self.bins.k} "
+                f"| discretize={t_discretize - t0:.4f}s "
+                f"| clf_fit={t_clf_fit - t_discretize:.4f}s "
+                f"| cache={t_cache - t_clf_fit:.4f}s "
+                f"| ensemble_members={ensemble_members_count} "
+                f"| total={t_cache - t0:.4f}s"
+            )
         return self
 
     def predict_proba(self, x: np.ndarray) -> np.ndarray:
@@ -405,10 +427,10 @@ class TabPFNObjectiveSurrogate:
 class TabPFNSurrogate:
     """Multi-objective TabPFN surrogate (one classifier per objective)."""
 
-    def __init__(self, objective_models: Sequence[Any], bin_edges: np.ndarray | Sequence[float]):
+    def __init__(self, objective_models: Sequence[Any], bin_edges: np.ndarray | Sequence[float], *, debug: bool = False):
         if not objective_models:
             raise ValueError("objective_models must be a non-empty sequence.")
-        self.objectives = [TabPFNObjectiveSurrogate(model=m, bin_edges=bin_edges) for m in objective_models]
+        self.objectives = [TabPFNObjectiveSurrogate(model=m, bin_edges=bin_edges, debug=bool(debug)) for m in objective_models]
 
     @property
     def n_objectives(self) -> int:
@@ -456,6 +478,7 @@ def build_tabpfn_surrogate(
     use_many_class_extension: bool = False,
     random_state: int | None = 0,
     n_estimators: int = 8,
+    debug: bool = False,
 ) -> TabPFNSurrogate:
     """Factory helper that constructs TabPFN classifier surrogates (optional dependency)."""
     try:
@@ -473,7 +496,7 @@ def build_tabpfn_surrogate(
                 raise ImportError("tabpfn-extensions[many_class] required for use_many_class_extension=True.") from exc
             base = ManyClassClassifier(estimator=base, random_state=random_state)
         models.append(base)
-    return TabPFNSurrogate(objective_models=models, bin_edges=bin_edges)
+    return TabPFNSurrogate(objective_models=models, bin_edges=bin_edges, debug=bool(debug))
 
 
 class TabPFNMinMaxSurrogate:
@@ -487,6 +510,7 @@ class TabPFNMinMaxSurrogate:
         use_many_class_extension: bool = False,
         random_state: int | None = 0,
         n_estimators: int = 8,
+        debug: bool = False,
     ):
         self.n_objectives = int(n_objectives)
         if self.n_objectives <= 0:
@@ -495,6 +519,7 @@ class TabPFNMinMaxSurrogate:
         self.use_many_class_extension = bool(use_many_class_extension)
         self.random_state = random_state
         self.n_estimators = int(n_estimators)
+        self.debug = bool(debug)
         if self.n_estimators <= 0:
             raise ValueError(f"n_estimators must be positive, got {n_estimators}.")
 
@@ -539,6 +564,7 @@ class TabPFNMinMaxSurrogate:
         return int(min(20, max(5, k)))
 
     def fit(self, x: np.ndarray, y: np.ndarray) -> "TabPFNMinMaxSurrogate":
+        t0 = time.perf_counter()
         x_arr = np.asarray(x, dtype=np.float32)
         y_arr = np.asarray(y, dtype=np.float32)
         if x_arr.ndim != 2:
@@ -553,13 +579,16 @@ class TabPFNMinMaxSurrogate:
         self._n_train_samples = int(x_arr.shape[0])
         self._x_min, self._x_rng = self._minmax_fit(x_arr)
         self._y_min, self._y_rng = self._minmax_fit(y_arr)
+        t_norm_stats = time.perf_counter()
 
         x_norm = self._norm_x(x_arr)
         y_norm = self._norm_y(y_arr)
+        t_norm_apply = time.perf_counter()
 
         k = self._choose_k(x_norm.shape[0])
         edges = np.linspace(0.0, 1.0, k + 1, dtype=np.float32)
         self._bins = TabPFNBins.from_edges(edges)
+        t_bins = time.perf_counter()
         self._model = build_tabpfn_surrogate(
             n_objectives=self.n_objectives,
             bin_edges=self._bins.edges,
@@ -567,7 +596,18 @@ class TabPFNMinMaxSurrogate:
             use_many_class_extension=self.use_many_class_extension,
             random_state=self.random_state,
             n_estimators=self.n_estimators,
+            debug=self.debug,
         ).fit(x_norm, y_norm)
+        t_model_fit = time.perf_counter()
+        if self.debug:
+            print(
+                f"[TabPFN fit] rows={x_arr.shape[0]} dim={x_arr.shape[1]} obj={y_arr.shape[1]} "
+                f"| norm_stats={t_norm_stats - t0:.4f}s "
+                f"| norm_apply={t_norm_apply - t_norm_stats:.4f}s "
+                f"| bins={t_bins - t_norm_apply:.4f}s "
+                f"| model_fit={t_model_fit - t_bins:.4f}s "
+                f"| total={t_model_fit - t0:.4f}s"
+            )
         return self
 
     def predict_mean_std(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

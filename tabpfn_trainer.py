@@ -231,6 +231,7 @@ class TabPFNDiscSAEAEnv(DiscSAEAEnv):
         self.tabpfn_batcher = tabpfn_batcher
 
     def _fit_surrogate(self):
+        fit_started_at = time.perf_counter()
         surrogate = build_surrogate_from_cfg(
             self._surrogate_cfg(),
             archive_x=self.archive_x,
@@ -239,6 +240,12 @@ class TabPFNDiscSAEAEnv(DiscSAEAEnv):
         if self.tabpfn_batcher is not None and _use_tabpfn_gpu_batch(self.cfg):
             surrogate = BatchedTabPFNSurrogate(surrogate, self.tabpfn_batcher)
         self.surrogate = surrogate
+        if bool(self.cfg.get("debug", False)):
+            print(
+                f"[refit] env={env_key(self.problem_name, self.dim)} seed={self.seed} step={self.t:03d} "
+                f"archive={int(self.archive_x.shape[0])} obj={int(self.archive_y.shape[1])} dim={int(self.archive_x.shape[1])} "
+                f"time={time.perf_counter() - fit_started_at:.4f}s"
+            )
         return self.surrogate
 
 
@@ -272,7 +279,14 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
         )
         self.init_hv = float(hypervolume(self.archive_y, self.ref_point))
         self.nsga2_problem = make_nsga2_problem_adapter(self.problem, int(self.archive_y.shape[1]))
+        fit_started_at = time.perf_counter()
         self._fit_surrogate()
+        if bool(self.cfg.get("debug", False)):
+            print(
+                f"[refit] env={env_key(self.problem_name, self.dim)} seed={self.seed} step={self.t:03d} "
+                f"archive={int(self.archive_x.shape[0])} obj={int(self.archive_y.shape[1])} dim={int(self.archive_x.shape[1])} "
+                f"time={time.perf_counter() - fit_started_at:.4f}s"
+            )
 
     def set_offspring_pool(self, offspring_x: np.ndarray, offspring_y: np.ndarray, offspring_sigma: np.ndarray) -> None:
         self.offspring_x = np.asarray(offspring_x, dtype=np.float32)
@@ -303,6 +317,12 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
             surrogate_refit_started_at = time.perf_counter()
             self._fit_surrogate()
             surrogate_refit_sec = time.perf_counter() - surrogate_refit_started_at
+            if bool(self.cfg.get("debug", False)):
+                print(
+                    f"[refit] env={env_key(self.problem_name, self.dim)} seed={self.seed} step={self.t:03d} "
+                    f"archive={int(self.archive_x.shape[0])} obj={int(self.archive_y.shape[1])} dim={int(self.archive_x.shape[1])} "
+                    f"time={surrogate_refit_sec:.4f}s"
+                )
             if str(self.cfg.get("surrogate_model", "")).lower() == "tabpfn":
                 tabpfn_refit_sec = surrogate_refit_sec
         return float(reward), bool(done), float(surrogate_refit_sec), float(tabpfn_refit_sec)

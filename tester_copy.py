@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from inspect import signature
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent_pth", type=str, default=None)
     parser.add_argument("--random_model", action="store_true")
     parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--kan_steps", type=int, default=25)
     parser.add_argument("--kan_hidden_width", type=int, default=10)
     parser.add_argument("--kan_grid", type=int, default=5)
@@ -111,6 +113,7 @@ def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: 
             archive_x=archive_x,
             archive_y=archive_y,
             device=str(args.device),
+            n_estimators=int(args.ensemble_model),
         )
 
     if name == "kan":
@@ -668,6 +671,7 @@ def main() -> None:
     disc = build_disc(args, map_location=str(args.device))
     history: list[StepRecord] = []
     step_rewards: list[float] = []
+    disc_forward_times_sec: list[float] = []
 
     # Pretrain surrogate on the initial archive (default: 80 points).
     surrogate = build_surrogate(args, archive_x, archive_y)
@@ -694,6 +698,7 @@ def main() -> None:
         )
 
         progress = float(step) / float(max(n_evo_steps - 1, 1))
+        disc_forward_started_at = time.perf_counter()
         with torch.no_grad():
             out = disc(
                 x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
@@ -708,6 +713,8 @@ def main() -> None:
                 epsilon=0.05,
             )
             logits = out["logits"].reshape(-1)
+        disc_forward_sec = time.perf_counter() - disc_forward_started_at
+        disc_forward_times_sec.append(float(disc_forward_sec))
         if bool(args.softmax):
             selected_idx, q_values = sample_offspring_index_softmax(logits)
         else:
@@ -748,7 +755,8 @@ def main() -> None:
 
         print(
             f"iter {record.step} | front = {front_size} | "
-            f"HV = {record.hv:.6f} | reward = {record.reward:.6f}"
+            f"HV = {record.hv:.6f} | reward = {record.reward:.6f} | "
+            f"disc_forward_sec = {disc_forward_sec:.3f}"
         )
         # Refit surrogate after admitting one new true-evaluated sample.
         surrogate = build_surrogate(args, archive_x, archive_y)
@@ -777,12 +785,14 @@ def main() -> None:
         "init_fe": int(args.init_fe),
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
+        "ensemble_model": int(args.ensemble_model),
         "agent_pth": args.agent_pth,
         "random_model": bool(args.random_model),
         "reference_point": ref_point.astype(float).tolist(),
         "archive_size": int(archive_x.shape[0]),
         "final_hv": float(hypervolume(archive_y, ref_point)),
         "mean_reward_40_steps": float(np.mean(step_rewards)) if len(step_rewards) > 0 else 0.0,
+        "mean_disc_forward_sec": float(np.mean(disc_forward_times_sec)) if len(disc_forward_times_sec) > 0 else 0.0,
         "final_front_size": int(final_front.shape[0]),
         "final_front": final_front.astype(float).tolist(),
         "plot_path": plot_path,
