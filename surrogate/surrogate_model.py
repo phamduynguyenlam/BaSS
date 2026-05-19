@@ -650,6 +650,42 @@ def _predict_proba_multi_context_batched_public(
 ) -> tuple[list[np.ndarray], dict[str, float]]:
     from inspect import signature
 
+    def _logits_to_full_probs(
+        *,
+        logits: torch.Tensor,
+        objective: TabPFNObjectiveSurrogate,
+        classifier: Any,
+        y_train_bins: np.ndarray,
+        class_permutation: np.ndarray | None,
+    ) -> np.ndarray:
+        logits_local = logits
+        if class_permutation is None:
+            logits_local = logits_local[:, : classifier.n_classes_]
+        else:
+            class_permutation = np.asarray(class_permutation, dtype=np.int64)
+            if len(class_permutation) != classifier.n_classes_:
+                use_perm = np.arange(classifier.n_classes_, dtype=np.int64)
+                use_perm[: len(class_permutation)] = class_permutation
+            else:
+                use_perm = class_permutation
+            logits_local = logits_local[:, use_perm]
+
+        fit_classes = objective._fit_classes
+        probs_partial_np = _apply_balanced_softmax_probs(
+            logits_local,
+            np.asarray(y_train_bins, dtype=np.float32),
+            n_classes_full=int(objective.bins.k),
+            active_classes=fit_classes,
+        )
+        if fit_classes is None or probs_partial_np.shape[1] == objective.bins.k:
+            return np.asarray(probs_partial_np, dtype=np.float32)
+
+        probs_full = np.zeros((probs_partial_np.shape[0], objective.bins.k), dtype=np.float32)
+        for col, cls_id in enumerate(fit_classes.tolist()):
+            if 0 <= int(cls_id) < objective.bins.k and col < probs_partial_np.shape[1]:
+                probs_full[:, int(cls_id)] = probs_partial_np[:, col]
+        return probs_full.astype(np.float32)
+
     if len(objectives) != len(queries):
         raise ValueError(f"objectives and queries must have the same length, got {len(objectives)} and {len(queries)}.")
     if len(objectives) == 0:
@@ -660,138 +696,245 @@ def _predict_proba_multi_context_batched_public(
             "postprocess_sec": 0.0,
         }
 
-    train_sizes = []
-    for objective in objectives:
+    group_prepare_started_at = time.perf_counter()
+    request_states: list[dict[str, Any]] = []
+    grouped_items: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    query_transform_sec = 0.0
+
+    for batch_idx, (objective, query) in enumerate(zip(objectives, queries)):
         if objective._fit_x is None or objective._fit_y_bins is None:
             raise RuntimeError("TabPFNObjectiveSurrogate is not fit yet.")
-        train_sizes.append(int(objective._fit_x.shape[0]))
-    if len(set(train_sizes)) != 1:
-        raise ValueError(f"All batched TabPFN objectives must have the same number of train rows, got {train_sizes}.")
-    train_rows = int(train_sizes[0])
 
-    group_prepare_started_at = time.perf_counter()
-    grouped_items: dict[int, list[dict[str, Any]]] = {}
-    for batch_idx, (objective, query) in enumerate(zip(objectives, queries)):
-        model_index = int(getattr(objective, "_fit_model_index", 0))
-        grouped_items.setdefault(model_index, []).append(
+        classifier = objective.model
+        ensemble_members = list(_get_tabpfn_ensemble_members(classifier))
+        n_estimators = int(len(ensemble_members))
+        if n_estimators <= 0:
+            raise RuntimeError("TabPFN multi-context batch did not expose any fitted ensemble members.")
+
+        estimator_probs: list[np.ndarray | None] = [None] * n_estimators
+        request_states.append(
             {
                 "batch_idx": int(batch_idx),
                 "objective": objective,
-                "query": np.asarray(query, dtype=np.float32),
+                "classifier": classifier,
+                "n_estimators": n_estimators,
+                "estimator_probs": estimator_probs,
             }
         )
 
+        query_arr = np.asarray(query, dtype=np.float32)
+        transform_started_at = time.perf_counter()
+        transformed_queries = [
+            np.asarray(member.transform_X_test(query_arr), dtype=np.float32) for member in ensemble_members
+        ]
+        query_transform_sec += time.perf_counter() - transform_started_at
+
+        for est_idx, (member, transformed_query) in enumerate(zip(ensemble_members, transformed_queries)):
+            x_train_member = np.asarray(member.X_train, dtype=np.float32)
+            y_train_member = np.asarray(member.y_train, dtype=np.float32).reshape(-1)
+            if x_train_member.ndim != 2 or transformed_query.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D TabPFN member tensors, got train={x_train_member.shape}, query={transformed_query.shape}."
+                )
+            if x_train_member.shape[1] != transformed_query.shape[1]:
+                raise ValueError(
+                    "TabPFN multi-context batch expects train/query to share feature width after preprocessing, "
+                    f"got {x_train_member.shape[1]} and {transformed_query.shape[1]}."
+                )
+
+            model_index = int(getattr(member.config, "_model_index", getattr(objective, "_fit_model_index", 0)))
+            device = classifier.devices_[0]
+            dtype = classifier.forced_inference_dtype_ if classifier.forced_inference_dtype_ is not None else torch.float32
+            has_gpu_preprocessor = member.gpu_preprocessor is not None
+            if has_gpu_preprocessor:
+                group_key = (
+                    "single_gpu_preprocessed_member",
+                    int(model_index),
+                    str(device),
+                    str(dtype),
+                    int(batch_idx),
+                    int(est_idx),
+                )
+            else:
+                group_key = (
+                    "batched_member_group",
+                    int(model_index),
+                    str(device),
+                    str(dtype),
+                    int(x_train_member.shape[0]),
+                    int(x_train_member.shape[1]),
+                )
+
+            grouped_items.setdefault(group_key, []).append(
+                {
+                    "batch_idx": int(batch_idx),
+                    "estimator_idx": int(est_idx),
+                    "objective": objective,
+                    "classifier": classifier,
+                    "member": member,
+                    "model_index": int(model_index),
+                    "device": device,
+                    "dtype": dtype,
+                    "x_train": x_train_member,
+                    "y_train": y_train_member,
+                    "query": transformed_query,
+                    "has_gpu_preprocessor": bool(has_gpu_preprocessor),
+                }
+            )
+
     probs_by_batch: list[np.ndarray | None] = [None for _ in objectives]
-    query_transform_sec = 0.0
     batch_prepare_sec = time.perf_counter() - group_prepare_started_at
     gpu_forward_sec = 0.0
     postprocess_sec = 0.0
 
-    for model_index, group_items in grouped_items.items():
-        ref_objective = group_items[0]["objective"]
-        classifier = ref_objective.model
+    for group_items in grouped_items.values():
+        ref_item = group_items[0]
+        classifier = ref_item["classifier"]
         if not hasattr(classifier, "model_") and not hasattr(classifier, "models_"):
             raise RuntimeError(f"TabPFN classifier does not expose model_ / models_ for batched public forward: {type(classifier).__name__}.")
 
+        model_index = int(ref_item["model_index"])
         if hasattr(classifier, "models_"):
             core_model = classifier.models_[int(model_index)]
         else:
             core_model = classifier.model_
 
-        device = classifier.devices_[0]
+        device = ref_item["device"]
         core_model = core_model.to(device)
-        dtype = classifier.forced_inference_dtype_ if classifier.forced_inference_dtype_ is not None else torch.float32
-
-        max_query_rows = max(int(item["query"].shape[0]) for item in group_items)
-        max_features = max(
-            max(int(item["objective"]._fit_x.shape[1]), int(item["query"].shape[1]))  # type: ignore[union-attr]
-            for item in group_items
-        )
-        local_batch_size = int(len(group_items))
-
-        x_full = torch.zeros((train_rows + max_query_rows, local_batch_size, max_features), dtype=dtype, device=device)
-        y_full = torch.zeros((train_rows, local_batch_size), dtype=dtype, device=device)
-        query_lengths: list[int] = []
-
-        fill_started_at = time.perf_counter()
-        for local_idx, item in enumerate(group_items):
-            objective = item["objective"]
-            x_train = np.asarray(objective._fit_x, dtype=np.float32)
-            y_bins = np.asarray(objective._fit_y_bins, dtype=np.float32).reshape(-1)
-            query = np.asarray(item["query"], dtype=np.float32)
-
-            x_full[:train_rows, local_idx, : x_train.shape[1]] = torch.as_tensor(x_train, dtype=dtype, device=device)
-            if query.shape[0] > 0:
-                x_full[train_rows : train_rows + query.shape[0], local_idx, : query.shape[1]] = torch.as_tensor(
-                    query,
-                    dtype=dtype,
-                    device=device,
-                )
-            y_full[:, local_idx] = torch.as_tensor(y_bins, dtype=dtype, device=device)
-            query_lengths.append(int(query.shape[0]))
-        batch_prepare_sec += time.perf_counter() - fill_started_at
+        dtype = ref_item["dtype"]
 
         kwargs = {}
         if "task_type" in signature(core_model.forward).parameters:
             kwargs["task_type"] = "multiclass"
 
         use_cuda_timing = str(device).startswith("cuda")
-        if use_cuda_timing:
-            torch.cuda.synchronize(device=device)
-        gpu_started_at = time.perf_counter()
-        with torch.autocast(device_type="cuda", enabled=use_cuda_timing):
-            with torch.inference_mode():
-                output = core_model(
-                    x_full,
-                    y_full,
-                    only_return_standard_out=True,
-                    **kwargs,
+        if any(bool(item["has_gpu_preprocessor"]) for item in group_items):
+            from tabpfn.inference import _maybe_run_gpu_preprocessing
+
+            for item in group_items:
+                fill_started_at = time.perf_counter()
+                x_train = np.asarray(item["x_train"], dtype=np.float32)
+                y_train = np.asarray(item["y_train"], dtype=np.float32).reshape(-1)
+                query = np.asarray(item["query"], dtype=np.float32)
+                x_full = torch.zeros(
+                    (int(x_train.shape[0]) + int(query.shape[0]), 1, int(x_train.shape[1])),
+                    dtype=dtype,
+                    device=device,
                 )
-        if use_cuda_timing:
-            torch.cuda.synchronize(device=device)
-        gpu_forward_sec += time.perf_counter() - gpu_started_at
+                y_full = torch.zeros((int(x_train.shape[0]), 1), dtype=dtype, device=device)
+                x_full[: x_train.shape[0], 0, :] = torch.as_tensor(x_train, dtype=dtype, device=device)
+                if query.shape[0] > 0:
+                    x_full[x_train.shape[0] :, 0, :] = torch.as_tensor(query, dtype=dtype, device=device)
+                y_full[:, 0] = torch.as_tensor(y_train, dtype=dtype, device=device)
+                x_full = _maybe_run_gpu_preprocessing(
+                    x_full,
+                    item["member"].gpu_preprocessor,
+                    num_train_rows=int(x_train.shape[0]),
+                )
+                batch_prepare_sec += time.perf_counter() - fill_started_at
 
-        if output.ndim != 3:
-            raise ValueError(f"Expected core TabPFN output with 3 dims, got shape={tuple(output.shape)}.")
+                if use_cuda_timing:
+                    torch.cuda.synchronize(device=device)
+                gpu_started_at = time.perf_counter()
+                with torch.autocast(device_type="cuda", enabled=use_cuda_timing):
+                    with torch.inference_mode():
+                        output = core_model(
+                            x_full,
+                            y_full,
+                            only_return_standard_out=True,
+                            **kwargs,
+                        )
+                if use_cuda_timing:
+                    torch.cuda.synchronize(device=device)
+                gpu_forward_sec += time.perf_counter() - gpu_started_at
 
-        postprocess_started_at = time.perf_counter()
-        for local_idx, item in enumerate(group_items):
-            objective = item["objective"]
-            classifier = objective.model
-            q_len = int(query_lengths[local_idx])
-            logits = output[:q_len, local_idx, :]
+                if output.ndim != 3:
+                    raise ValueError(f"Expected core TabPFN output with 3 dims, got shape={tuple(output.shape)}.")
 
-            class_permutation = objective._fit_class_permutation
-            if class_permutation is None:
-                logits = logits[:, : classifier.n_classes_]
-            else:
-                if len(class_permutation) != classifier.n_classes_:
-                    use_perm = np.arange(classifier.n_classes_, dtype=np.int64)
-                    use_perm[: len(class_permutation)] = class_permutation
-                else:
-                    use_perm = class_permutation
-                logits = logits[:, use_perm]
+                postprocess_started_at = time.perf_counter()
+                logits = output[: query.shape[0], 0, :]
+                probs_full = _logits_to_full_probs(
+                    logits=logits,
+                    objective=item["objective"],
+                    classifier=item["classifier"],
+                    y_train_bins=y_train,
+                    class_permutation=getattr(item["member"].config, "class_permutation", None),
+                )
+                request_states[int(item["batch_idx"])]["estimator_probs"][int(item["estimator_idx"])] = probs_full.astype(np.float32)
+                postprocess_sec += time.perf_counter() - postprocess_started_at
+        else:
+            train_rows = int(ref_item["x_train"].shape[0])
+            feature_dim = int(ref_item["x_train"].shape[1])
+            max_query_rows = max(int(np.asarray(item["query"]).shape[0]) for item in group_items)
+            local_batch_size = int(len(group_items))
 
-            fit_classes = objective._fit_classes
-            probs_partial_np = _apply_balanced_softmax_probs(
-                logits,
-                np.asarray(objective._fit_y_bins, dtype=np.float32),
-                n_classes_full=int(objective.bins.k),
-                active_classes=fit_classes,
+            x_full = torch.zeros((train_rows + max_query_rows, local_batch_size, feature_dim), dtype=dtype, device=device)
+            y_full = torch.zeros((train_rows, local_batch_size), dtype=dtype, device=device)
+            query_lengths: list[int] = []
+
+            fill_started_at = time.perf_counter()
+            for local_idx, item in enumerate(group_items):
+                x_train = np.asarray(item["x_train"], dtype=np.float32)
+                y_train = np.asarray(item["y_train"], dtype=np.float32).reshape(-1)
+                query = np.asarray(item["query"], dtype=np.float32)
+                if int(x_train.shape[0]) != train_rows or int(x_train.shape[1]) != feature_dim:
+                    raise ValueError(
+                        "TabPFN multi-context batched forward requires aligned train shapes within a batch group, "
+                        f"got {(x_train.shape[0], x_train.shape[1])} vs {(train_rows, feature_dim)}."
+                    )
+                x_full[:train_rows, local_idx, :] = torch.as_tensor(x_train, dtype=dtype, device=device)
+                if query.shape[0] > 0:
+                    x_full[train_rows : train_rows + query.shape[0], local_idx, :] = torch.as_tensor(
+                        query,
+                        dtype=dtype,
+                        device=device,
+                    )
+                y_full[:, local_idx] = torch.as_tensor(y_train, dtype=dtype, device=device)
+                query_lengths.append(int(query.shape[0]))
+            batch_prepare_sec += time.perf_counter() - fill_started_at
+
+            if use_cuda_timing:
+                torch.cuda.synchronize(device=device)
+            gpu_started_at = time.perf_counter()
+            with torch.autocast(device_type="cuda", enabled=use_cuda_timing):
+                with torch.inference_mode():
+                    output = core_model(
+                        x_full,
+                        y_full,
+                        only_return_standard_out=True,
+                        **kwargs,
+                    )
+            if use_cuda_timing:
+                torch.cuda.synchronize(device=device)
+            gpu_forward_sec += time.perf_counter() - gpu_started_at
+
+            if output.ndim != 3:
+                raise ValueError(f"Expected core TabPFN output with 3 dims, got shape={tuple(output.shape)}.")
+
+            postprocess_started_at = time.perf_counter()
+            for local_idx, item in enumerate(group_items):
+                logits = output[: query_lengths[local_idx], local_idx, :]
+                probs_full = _logits_to_full_probs(
+                    logits=logits,
+                    objective=item["objective"],
+                    classifier=item["classifier"],
+                    y_train_bins=np.asarray(item["y_train"], dtype=np.float32),
+                    class_permutation=getattr(item["member"].config, "class_permutation", None),
+                )
+                request_states[int(item["batch_idx"])]["estimator_probs"][int(item["estimator_idx"])] = probs_full.astype(np.float32)
+            postprocess_sec += time.perf_counter() - postprocess_started_at
+
+    for state in request_states:
+        estimator_probs = state["estimator_probs"]
+        if any(prob is None for prob in estimator_probs):
+            missing = [idx for idx, prob in enumerate(estimator_probs) if prob is None]
+            raise RuntimeError(
+                f"Missing custom TabPFN ensemble probabilities for request {state['batch_idx']} estimator indices {missing}."
             )
-            if fit_classes is None:
-                probs_full = np.asarray(probs_partial_np, dtype=np.float32)
-            elif probs_partial_np.shape[1] == objective.bins.k:
-                probs_full = np.asarray(probs_partial_np, dtype=np.float32)
-            else:
-                probs_full = np.zeros((probs_partial_np.shape[0], objective.bins.k), dtype=np.float32)
-                for col, cls_id in enumerate(fit_classes.tolist()):
-                    if 0 <= int(cls_id) < objective.bins.k and col < probs_partial_np.shape[1]:
-                        probs_full[:, int(cls_id)] = probs_partial_np[:, col]
-
-            probs_by_batch[int(item["batch_idx"])] = probs_full.astype(np.float32)
-        postprocess_sec += time.perf_counter() - postprocess_started_at
-        query_transform_sec += 0.0
+        probs_by_batch[int(state["batch_idx"])] = np.mean(
+            np.stack([np.asarray(prob, dtype=np.float32) for prob in estimator_probs if prob is not None], axis=0),
+            axis=0,
+        ).astype(np.float32)
 
     if any(probs is None for probs in probs_by_batch):
         missing = [idx for idx, probs in enumerate(probs_by_batch) if probs is None]
