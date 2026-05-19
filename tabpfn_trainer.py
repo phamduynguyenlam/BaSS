@@ -278,7 +278,7 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
         self.offspring_y = np.asarray(offspring_y, dtype=np.float32)
         self.offspring_sigma = np.asarray(offspring_sigma, dtype=np.float32)
 
-    def apply_action_without_refresh(self, action_idx: int) -> tuple[float, bool]:
+    def apply_action_without_refresh(self, action_idx: int) -> tuple[float, bool, float, float]:
         chosen_idx = int(np.clip(int(action_idx), 0, int(self.offspring_x.shape[0]) - 1))
         previous_archive_y = np.asarray(self.archive_y, dtype=np.float32).copy()
         chosen_x = self.offspring_x[chosen_idx : chosen_idx + 1]
@@ -296,9 +296,15 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
 
         self.t += 1
         done = self.t >= self.max_steps
+        surrogate_refit_sec = 0.0
+        tabpfn_refit_sec = 0.0
         if not done:
+            surrogate_refit_started_at = time.perf_counter()
             self._fit_surrogate()
-        return float(reward), bool(done)
+            surrogate_refit_sec = time.perf_counter() - surrogate_refit_started_at
+            if str(self.cfg.get("surrogate_model", "")).lower() == "tabpfn":
+                tabpfn_refit_sec = surrogate_refit_sec
+        return float(reward), bool(done), float(surrogate_refit_sec), float(tabpfn_refit_sec)
 
 
 def _initial_nsga2_population(archive_x: np.ndarray, pop_size: int, seed: int) -> np.ndarray:
@@ -514,10 +520,24 @@ def rollout_episode_batch_synchronized(
 
         step_dones: list[bool] = []
         step_rewards: list[float] = []
+        step_post_action_started_at = time.perf_counter()
+        step_surrogate_refit_sec = 0.0
+        step_tabpfn_refit_sec = 0.0
         for env, action in zip(envs, actions):
-            reward, done = env.apply_action_without_refresh(action)
+            reward, done, surrogate_refit_sec, tabpfn_refit_sec = env.apply_action_without_refresh(action)
             step_rewards.append(float(reward))
             step_dones.append(bool(done))
+            step_surrogate_refit_sec += float(surrogate_refit_sec)
+            step_tabpfn_refit_sec += float(tabpfn_refit_sec)
+        step_post_action_total_sec = time.perf_counter() - step_post_action_started_at
+        if debug_log is not None and len(envs) > 0:
+            debug_log(
+                f"[ENV sync] step={envs[0].t:03d} | "
+                f"envs={len(envs)} | "
+                f"surrogate_refit_sec={step_surrogate_refit_sec:.3f} | "
+                f"tabpfn_refit_sec={step_tabpfn_refit_sec:.3f} | "
+                f"post_action_total_sec={step_post_action_total_sec:.3f}"
+            )
 
         active_envs = [env for env, done in zip(envs, step_dones) if not done]
         if active_envs:
