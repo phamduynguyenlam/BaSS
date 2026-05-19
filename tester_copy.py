@@ -19,6 +19,7 @@ from reward import hypervolume, pareto_front, reward_scheme_1
 from surrogate.surrogate_model import (
     TabPFNMinMaxSurrogate,
     _apply_balanced_softmax_probs,
+    _get_tabpfn_ensemble_members,
     estimate_uncertainty,
     fit_gp_surrogates,
     fit_kan_surrogates,
@@ -276,46 +277,26 @@ def _predict_tabpfn_minmax_mean_std_softmax(
 
         classifier = objective.model
         x_train = np.asarray(objective._fit_x, dtype=np.float32)
-        y_bins = np.asarray(objective._fit_y_bins, dtype=np.float32).reshape(-1)
         if x_train.shape[1] != x_norm.shape[1]:
             raise ValueError(
                 f"TabPFN custom ensemble expects train/query to share feature width, got {x_train.shape[1]} and {x_norm.shape[1]}."
             )
 
-        ensemble_configs = list(getattr(classifier, "ensemble_configs_", []) or [])
-        n_estimators = int(getattr(classifier, "n_estimators", len(ensemble_configs) if ensemble_configs else 8))
-        if len(ensemble_configs) == 0:
-            ensemble_configs = [None] * n_estimators
-        else:
-            n_estimators = int(len(ensemble_configs))
-
-        random_state = getattr(classifier, "random_state", None)
-        if isinstance(random_state, (int, np.integer)):
-            seed_base = int(random_state)
-        else:
-            seed_base = 0
-
-        feature_dim = int(x_train.shape[1])
-        estimator_permutations: list[np.ndarray] = []
-        for est_idx in range(n_estimators):
-            if est_idx == 0:
-                estimator_permutations.append(np.arange(feature_dim, dtype=np.int64))
-            else:
-                rng = np.random.default_rng(seed_base + 9973 * objective_idx + est_idx)
-                estimator_permutations.append(rng.permutation(feature_dim).astype(np.int64))
+        ensemble_members = list(_get_tabpfn_ensemble_members(classifier))
+        n_estimators = int(len(ensemble_members))
+        if n_estimators <= 0:
+            raise RuntimeError("TabPFN custom ensemble did not expose any fitted ensemble members.")
 
         grouped_estimators: dict[int, list[tuple[int, Any]]] = {}
-        for est_idx, cfg in enumerate(ensemble_configs):
-            model_index = int(getattr(cfg, "_model_index", getattr(objective, "_fit_model_index", 0))) if cfg is not None else int(
-                getattr(objective, "_fit_model_index", 0)
-            )
-            grouped_estimators.setdefault(model_index, []).append((est_idx, cfg))
+        for est_idx, member in enumerate(ensemble_members):
+            model_index = int(getattr(member.config, "_model_index", getattr(objective, "_fit_model_index", 0)))
+            grouped_estimators.setdefault(model_index, []).append((est_idx, member))
 
         probs_full_estimators: list[np.ndarray | None] = [None] * n_estimators
         device = classifier.devices_[0]
         dtype = classifier.forced_inference_dtype_ if classifier.forced_inference_dtype_ is not None else torch.float32
 
-        for model_index, grouped_cfgs in grouped_estimators.items():
+        for model_index, grouped_members in grouped_estimators.items():
             if hasattr(classifier, "models_"):
                 core_model = classifier.models_[model_index]
             elif hasattr(classifier, "model_"):
@@ -324,67 +305,157 @@ def _predict_tabpfn_minmax_mean_std_softmax(
                 raise RuntimeError(f"TabPFN classifier does not expose model_ / models_: {type(classifier).__name__}.")
             core_model = core_model.to(device)
 
-            local_batch_size = int(len(grouped_cfgs))
-            x_full = torch.zeros(
-                (int(x_train.shape[0]) + int(x_norm.shape[0]), local_batch_size, feature_dim),
-                dtype=dtype,
-                device=device,
+            transformed_queries = [
+                np.asarray(member.transform_X_test(x_norm), dtype=np.float32) for _, member in grouped_members
+            ]
+            local_batch_size = int(len(grouped_members))
+            feature_dim = int(
+                max(
+                    max(int(np.asarray(member.X_train).shape[1]), int(query.shape[1]))
+                    for (_, member), query in zip(grouped_members, transformed_queries)
+                )
             )
-            y_full = torch.zeros((int(x_train.shape[0]), local_batch_size), dtype=dtype, device=device)
-
-            for local_idx, (est_idx, _cfg) in enumerate(grouped_cfgs):
-                perm = estimator_permutations[est_idx]
-                x_train_perm = x_train[:, perm]
-                x_query_perm = x_norm[:, perm]
-                x_full[: x_train.shape[0], local_idx, :] = torch.as_tensor(x_train_perm, dtype=dtype, device=device)
-                if x_norm.shape[0] > 0:
-                    x_full[x_train.shape[0] :, local_idx, :] = torch.as_tensor(x_query_perm, dtype=dtype, device=device)
-                y_full[:, local_idx] = torch.as_tensor(y_bins, dtype=dtype, device=device)
-
+            train_rows = int(max(int(np.asarray(member.X_train).shape[0]) for _, member in grouped_members))
+            query_rows = int(max(int(query.shape[0]) for query in transformed_queries))
             kwargs = {}
             if "task_type" in signature(core_model.forward).parameters:
                 kwargs["task_type"] = "multiclass"
 
-            with torch.autocast(device_type="cuda", enabled=str(device).startswith("cuda")):
-                with torch.inference_mode():
-                    output = core_model(
-                        x_full,
-                        y_full,
-                        only_return_standard_out=True,
-                        **kwargs,
+            if any(member.gpu_preprocessor is not None for _, member in grouped_members):
+                from tabpfn.inference import _maybe_run_gpu_preprocessing
+
+                for (est_idx, member), x_query_member in zip(grouped_members, transformed_queries):
+                    x_train_member = np.asarray(member.X_train, dtype=np.float32)
+                    y_train_member = np.asarray(member.y_train, dtype=np.float32).reshape(-1)
+                    x_full = torch.zeros(
+                        (x_train_member.shape[0] + x_query_member.shape[0], 1, feature_dim),
+                        dtype=dtype,
+                        device=device,
                     )
-
-            for local_idx, (est_idx, cfg) in enumerate(grouped_cfgs):
-                logits = output[: x_norm.shape[0], local_idx, :]
-                class_permutation = (
-                    np.asarray(getattr(cfg, "class_permutation", None), dtype=np.int64)
-                    if cfg is not None and getattr(cfg, "class_permutation", None) is not None
-                    else objective._fit_class_permutation
-                )
-                if class_permutation is None:
-                    logits = logits[:, : classifier.n_classes_]
-                else:
-                    if len(class_permutation) != classifier.n_classes_:
-                        use_perm = np.arange(classifier.n_classes_, dtype=np.int64)
-                        use_perm[: len(class_permutation)] = class_permutation
+                    y_full = torch.zeros((x_train_member.shape[0], 1), dtype=dtype, device=device)
+                    x_full[: x_train_member.shape[0], 0, : x_train_member.shape[1]] = torch.as_tensor(
+                        x_train_member,
+                        dtype=dtype,
+                        device=device,
+                    )
+                    if x_query_member.shape[0] > 0:
+                        x_full[x_train_member.shape[0] :, 0, : x_query_member.shape[1]] = torch.as_tensor(
+                            x_query_member,
+                            dtype=dtype,
+                            device=device,
+                        )
+                    y_full[:, 0] = torch.as_tensor(y_train_member, dtype=dtype, device=device)
+                    x_full = _maybe_run_gpu_preprocessing(
+                        x_full,
+                        member.gpu_preprocessor,
+                        num_train_rows=int(x_train_member.shape[0]),
+                    )
+                    with torch.autocast(device_type="cuda", enabled=str(device).startswith("cuda")):
+                        with torch.inference_mode():
+                            output = core_model(
+                                x_full,
+                                y_full,
+                                only_return_standard_out=True,
+                                **kwargs,
+                            )
+                    logits = output[: x_query_member.shape[0], 0, :]
+                    class_permutation = getattr(member.config, "class_permutation", None)
+                    if class_permutation is None:
+                        logits = logits[:, : classifier.n_classes_]
                     else:
-                        use_perm = class_permutation
-                    logits = logits[:, use_perm]
+                        class_permutation = np.asarray(class_permutation, dtype=np.int64)
+                        if len(class_permutation) != classifier.n_classes_:
+                            use_perm = np.arange(classifier.n_classes_, dtype=np.int64)
+                            use_perm[: len(class_permutation)] = class_permutation
+                        else:
+                            use_perm = class_permutation
+                        logits = logits[:, use_perm]
 
-                probs_partial = _apply_balanced_softmax_probs(
-                    logits,
-                    y_bins,
-                    n_classes_full=int(objective.bins.k),
-                    active_classes=objective._fit_classes,
+                    probs_partial = _apply_balanced_softmax_probs(
+                        logits,
+                        y_train_member,
+                        n_classes_full=int(objective.bins.k),
+                        active_classes=objective._fit_classes,
+                    )
+                    if objective._fit_classes is None or probs_partial.shape[1] == objective.bins.k:
+                        probs_full = np.asarray(probs_partial, dtype=np.float32)
+                    else:
+                        probs_full = np.zeros((probs_partial.shape[0], objective.bins.k), dtype=np.float32)
+                        for col, cls_id in enumerate(objective._fit_classes.tolist()):
+                            if 0 <= int(cls_id) < objective.bins.k and col < probs_partial.shape[1]:
+                                probs_full[:, int(cls_id)] = probs_partial[:, col]
+                    probs_full_estimators[est_idx] = probs_full.astype(np.float32)
+            else:
+                x_full = torch.zeros(
+                    (train_rows + query_rows, local_batch_size, feature_dim),
+                    dtype=dtype,
+                    device=device,
                 )
-                if objective._fit_classes is None or probs_partial.shape[1] == objective.bins.k:
-                    probs_full = np.asarray(probs_partial, dtype=np.float32)
-                else:
-                    probs_full = np.zeros((probs_partial.shape[0], objective.bins.k), dtype=np.float32)
-                    for col, cls_id in enumerate(objective._fit_classes.tolist()):
-                        if 0 <= int(cls_id) < objective.bins.k and col < probs_partial.shape[1]:
-                            probs_full[:, int(cls_id)] = probs_partial[:, col]
-                probs_full_estimators[est_idx] = probs_full.astype(np.float32)
+                y_full = torch.zeros((train_rows, local_batch_size), dtype=dtype, device=device)
+                query_lengths: list[int] = []
+
+                for local_idx, ((_, member), x_query_member) in enumerate(zip(grouped_members, transformed_queries)):
+                    x_train_member = np.asarray(member.X_train, dtype=np.float32)
+                    y_train_member = np.asarray(member.y_train, dtype=np.float32).reshape(-1)
+                    x_full[: x_train_member.shape[0], local_idx, : x_train_member.shape[1]] = torch.as_tensor(
+                        x_train_member,
+                        dtype=dtype,
+                        device=device,
+                    )
+                    if x_query_member.shape[0] > 0:
+                        x_full[
+                            x_train_member.shape[0] : x_train_member.shape[0] + x_query_member.shape[0],
+                            local_idx,
+                            : x_query_member.shape[1],
+                        ] = torch.as_tensor(
+                            x_query_member,
+                            dtype=dtype,
+                            device=device,
+                        )
+                    y_full[: y_train_member.shape[0], local_idx] = torch.as_tensor(
+                        y_train_member,
+                        dtype=dtype,
+                        device=device,
+                    )
+                    query_lengths.append(int(x_query_member.shape[0]))
+
+                with torch.autocast(device_type="cuda", enabled=str(device).startswith("cuda")):
+                    with torch.inference_mode():
+                        output = core_model(
+                            x_full,
+                            y_full,
+                            only_return_standard_out=True,
+                            **kwargs,
+                        )
+
+                for local_idx, ((est_idx, member), x_query_member) in enumerate(zip(grouped_members, transformed_queries)):
+                    logits = output[: query_lengths[local_idx], local_idx, :]
+                    class_permutation = getattr(member.config, "class_permutation", None)
+                    if class_permutation is None:
+                        logits = logits[:, : classifier.n_classes_]
+                    else:
+                        class_permutation = np.asarray(class_permutation, dtype=np.int64)
+                        if len(class_permutation) != classifier.n_classes_:
+                            use_perm = np.arange(classifier.n_classes_, dtype=np.int64)
+                            use_perm[: len(class_permutation)] = class_permutation
+                        else:
+                            use_perm = class_permutation
+                        logits = logits[:, use_perm]
+
+                    probs_partial = _apply_balanced_softmax_probs(
+                        logits,
+                        np.asarray(member.y_train, dtype=np.float32),
+                        n_classes_full=int(objective.bins.k),
+                        active_classes=objective._fit_classes,
+                    )
+                    if objective._fit_classes is None or probs_partial.shape[1] == objective.bins.k:
+                        probs_full = np.asarray(probs_partial, dtype=np.float32)
+                    else:
+                        probs_full = np.zeros((probs_partial.shape[0], objective.bins.k), dtype=np.float32)
+                        for col, cls_id in enumerate(objective._fit_classes.tolist()):
+                            if 0 <= int(cls_id) < objective.bins.k and col < probs_partial.shape[1]:
+                                probs_full[:, int(cls_id)] = probs_partial[:, col]
+                    probs_full_estimators[est_idx] = probs_full.astype(np.float32)
 
         if any(probs is None for probs in probs_full_estimators):
             missing = [idx for idx, probs in enumerate(probs_full_estimators) if probs is None]
