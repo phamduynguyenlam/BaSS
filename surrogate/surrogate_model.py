@@ -202,12 +202,19 @@ def update_uncertainty_archive(
     return merged_x[idx], merged_y[idx]
 
 
-def fit_tabpfn_surrogate(*, archive_x: np.ndarray, archive_y: np.ndarray, device: str) -> Any:
+def fit_tabpfn_surrogate(
+    *,
+    archive_x: np.ndarray,
+    archive_y: np.ndarray,
+    device: str,
+    n_estimators: int = 8,
+) -> Any:
     archive_x = np.asarray(archive_x, dtype=np.float32)
     archive_y = np.asarray(archive_y, dtype=np.float32)
     return TabPFNMinMaxSurrogate(
         n_objectives=int(archive_y.shape[1]),
         tabpfn_device=str(device),
+        n_estimators=int(n_estimators),
     ).fit(archive_x, archive_y)
 
 
@@ -448,6 +455,7 @@ def build_tabpfn_surrogate(
     tabpfn_device: str = "cpu",
     use_many_class_extension: bool = False,
     random_state: int | None = 0,
+    n_estimators: int = 8,
 ) -> TabPFNSurrogate:
     """Factory helper that constructs TabPFN classifier surrogates (optional dependency)."""
     try:
@@ -457,7 +465,7 @@ def build_tabpfn_surrogate(
 
     models: list[Any] = []
     for _ in range(int(n_objectives)):
-        base = TabPFNClassifier(device=tabpfn_device, n_estimators=8)
+        base = TabPFNClassifier(device=tabpfn_device, n_estimators=int(n_estimators))
         if use_many_class_extension:
             try:
                 from tabpfn_extensions.manyclass_classifier import ManyClassClassifier  # type: ignore
@@ -478,6 +486,7 @@ class TabPFNMinMaxSurrogate:
         tabpfn_device: str = "cpu",
         use_many_class_extension: bool = False,
         random_state: int | None = 0,
+        n_estimators: int = 8,
     ):
         self.n_objectives = int(n_objectives)
         if self.n_objectives <= 0:
@@ -485,6 +494,9 @@ class TabPFNMinMaxSurrogate:
         self.tabpfn_device = str(tabpfn_device)
         self.use_many_class_extension = bool(use_many_class_extension)
         self.random_state = random_state
+        self.n_estimators = int(n_estimators)
+        if self.n_estimators <= 0:
+            raise ValueError(f"n_estimators must be positive, got {n_estimators}.")
 
         self._x_min: np.ndarray | None = None
         self._x_rng: np.ndarray | None = None
@@ -554,6 +566,7 @@ class TabPFNMinMaxSurrogate:
             tabpfn_device=self.tabpfn_device,
             use_many_class_extension=self.use_many_class_extension,
             random_state=self.random_state,
+            n_estimators=self.n_estimators,
         ).fit(x_norm, y_norm)
         return self
 

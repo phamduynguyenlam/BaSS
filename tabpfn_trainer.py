@@ -49,6 +49,7 @@ def parse_args():
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
     parser.add_argument("--num_thread", type=int, default=12)
@@ -680,6 +681,7 @@ def train_disc_ddqn_tabpfn(
     gamma=None,
     reward_scheme=1,
     surrogate_model="tabpfn",
+    ensemble_model=8,
     training_set=1,
     surrogate_nsga_steps=100,
     num_thread=12,
@@ -697,6 +699,7 @@ def train_disc_ddqn_tabpfn(
         cfg.gamma = float(gamma)
     cfg.reward_scheme = int(reward_scheme)
     cfg.surrogate_model = str(surrogate_model).lower()
+    cfg.ensemble_model = int(ensemble_model)
     cfg.training_set = int(training_set)
     cfg.heldout_problem = str(problem_name).upper()
     cfg.surrogate_nsga_steps = int(surrogate_nsga_steps)
@@ -780,6 +783,7 @@ def train_disc_ddqn_tabpfn(
         f"reward_scheme={cfg.reward_scheme} | "
         f"policy={cfg.policy_mode} | "
         f"surrogate={cfg.surrogate_model} | "
+        f"ensemble_model={cfg.ensemble_model} | "
         f"sampling_backend={sampling_backend} | "
         f"epochs={cfg.train_iters} | "
         f"sur_steps={cfg.surrogate_nsga_steps} | "
@@ -807,6 +811,7 @@ def train_disc_ddqn_tabpfn(
                 f"heldout={cfg.heldout_problem} | "
                 f"envs_active={len(env_specs)}/{len(env_specs)} | "
                 f"surrogate={cfg.surrogate_model} | "
+                f"ensemble_model={cfg.ensemble_model} | "
                 f"sur_steps={cfg.surrogate_nsga_steps} | "
                 f"eps={epsilon:.3f}"
             )
@@ -943,7 +948,7 @@ def train_disc_ddqn_tabpfn(
                 log(
                     f"epoch {epoch_id} done | mean reward/FE = {mean_ep_reward:.4f} | "
                     f"set = {cfg.training_set} | heldout = {cfg.heldout_problem} | "
-                    f"surrogate = {cfg.surrogate_model} | sur_steps = {cfg.surrogate_nsga_steps} | "
+                    f"surrogate = {cfg.surrogate_model} | ensemble_model = {cfg.ensemble_model} | sur_steps = {cfg.surrogate_nsga_steps} | "
                     f"workers = {actual_num_workers} | replay = {len(replay)} | "
                     f"reward_scheme = {cfg.reward_scheme} | policy = {cfg.policy_mode} | update = skipped"
                     f" | interact_time_sec = {interact_elapsed:.3f}"
@@ -1020,6 +1025,7 @@ def train_disc_ddqn_tabpfn(
                 f"heldout={cfg.heldout_problem} | "
                 f"envs_active={len(env_specs)}/{len(env_specs)} | "
                 f"surrogate={cfg.surrogate_model} | "
+                f"ensemble_model={cfg.ensemble_model} | "
                 f"sur_steps={cfg.surrogate_nsga_steps} | "
                 f"interact_time_sec={interact_elapsed:.3f} | "
                 f"updates={cfg.updates_per_epoch} | "
@@ -1041,7 +1047,7 @@ def train_disc_ddqn_tabpfn(
             log(
                 f"epoch {epoch_id} done | mean reward/FE = {mean_ep_reward:.4f} | "
                 f"set = {cfg.training_set} | heldout = {cfg.heldout_problem} | "
-                f"surrogate = {cfg.surrogate_model} | sur_steps = {cfg.surrogate_nsga_steps} | "
+                f"surrogate = {cfg.surrogate_model} | ensemble_model = {cfg.ensemble_model} | sur_steps = {cfg.surrogate_nsga_steps} | "
                 f"workers = {actual_num_workers} | replay = {len(replay)} | "
                 f"reward_scheme = {cfg.reward_scheme} | policy = {cfg.policy_mode} | "
                 f"interact_time_sec = {interact_elapsed:.3f} | "
@@ -1088,6 +1094,7 @@ if __name__ == "__main__":
         gamma=args.gamma,
         reward_scheme=int(args.reward_scheme),
         surrogate_model=str(args.surrogate_model),
+        ensemble_model=int(args.ensemble_model),
         training_set=int(args.training_set),
         surrogate_nsga_steps=int(args.surrogate_nsga_steps),
         num_thread=int(args.num_thread),

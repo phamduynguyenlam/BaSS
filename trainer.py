@@ -67,6 +67,7 @@ class TrainConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     rollout_device: str = "cpu"
     surrogate_device: str = "cpu"
+    ensemble_model: int = 8
 
 
 class ReplayBuffer:
@@ -185,6 +186,7 @@ def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y):
             archive_x=np.asarray(archive_x, dtype=np.float32),
             archive_y=np.asarray(archive_y, dtype=np.float32),
             device=surrogate_device,
+            n_estimators=int(cfg_dict.get("ensemble_model", 8)),
         )
 
     raise ValueError(f"Unsupported surrogate_model: {surrogate_name}")
