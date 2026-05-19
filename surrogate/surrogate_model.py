@@ -209,9 +209,29 @@ def fit_tabpfn_surrogate(
     device: str,
     n_estimators: int = 8,
     debug: bool = False,
+    existing_surrogate: Any | None = None,
 ) -> Any:
     archive_x = np.asarray(archive_x, dtype=np.float32)
     archive_y = np.asarray(archive_y, dtype=np.float32)
+    if existing_surrogate is not None:
+        if not isinstance(existing_surrogate, TabPFNMinMaxSurrogate):
+            raise TypeError(
+                f"existing_surrogate must be TabPFNMinMaxSurrogate when provided, got {type(existing_surrogate).__name__}."
+            )
+        if int(existing_surrogate.n_objectives) != int(archive_y.shape[1]):
+            raise ValueError(
+                f"existing_surrogate n_objectives={existing_surrogate.n_objectives} does not match archive_y.shape[1]={archive_y.shape[1]}."
+            )
+        if int(existing_surrogate.n_estimators) != int(n_estimators):
+            raise ValueError(
+                f"existing_surrogate n_estimators={existing_surrogate.n_estimators} does not match requested n_estimators={n_estimators}."
+            )
+        if str(existing_surrogate.tabpfn_device) != str(device):
+            raise ValueError(
+                f"existing_surrogate tabpfn_device={existing_surrogate.tabpfn_device} does not match requested device={device}."
+            )
+        existing_surrogate.debug = bool(debug)
+        return existing_surrogate.fit(archive_x, archive_y)
     return TabPFNMinMaxSurrogate(
         n_objectives=int(archive_y.shape[1]),
         tabpfn_device=str(device),
@@ -500,7 +520,7 @@ def build_tabpfn_surrogate(
 
 
 class TabPFNMinMaxSurrogate:
-    """TabPFN surrogate with per-fit min-max normalization and adaptive bin count K."""
+    """TabPFN surrogate with per-fit min-max normalization and fixed 10-bin targets on [0, 1]."""
 
     def __init__(
         self,
@@ -522,13 +542,16 @@ class TabPFNMinMaxSurrogate:
         self.debug = bool(debug)
         if self.n_estimators <= 0:
             raise ValueError(f"n_estimators must be positive, got {n_estimators}.")
+        self.n_bins = 10
 
         self._x_min: np.ndarray | None = None
         self._x_rng: np.ndarray | None = None
         self._y_min: np.ndarray | None = None
         self._y_rng: np.ndarray | None = None
         self._n_train_samples: int | None = None
-        self._bins: TabPFNBins | None = None
+        self._bins: TabPFNBins = TabPFNBins.from_edges(
+            np.linspace(0.0, 1.0, int(self.n_bins) + 1, dtype=np.float32)
+        )
         self._model: TabPFNSurrogate | None = None
 
     @staticmethod
@@ -557,11 +580,8 @@ class TabPFNMinMaxSurrogate:
 
     @staticmethod
     def _choose_k(n_samples: int) -> int:
-        n_samples = int(n_samples)
-        if n_samples <= 0:
-            return 5
-        k = int(np.sqrt(float(n_samples)))
-        return int(min(20, max(5, k)))
+        del n_samples
+        return 10
 
     def fit(self, x: np.ndarray, y: np.ndarray) -> "TabPFNMinMaxSurrogate":
         t0 = time.perf_counter()
@@ -585,19 +605,21 @@ class TabPFNMinMaxSurrogate:
         y_norm = self._norm_y(y_arr)
         t_norm_apply = time.perf_counter()
 
-        k = self._choose_k(x_norm.shape[0])
-        edges = np.linspace(0.0, 1.0, k + 1, dtype=np.float32)
-        self._bins = TabPFNBins.from_edges(edges)
         t_bins = time.perf_counter()
-        self._model = build_tabpfn_surrogate(
-            n_objectives=self.n_objectives,
-            bin_edges=self._bins.edges,
-            tabpfn_device=self.tabpfn_device,
-            use_many_class_extension=self.use_many_class_extension,
-            random_state=self.random_state,
-            n_estimators=self.n_estimators,
-            debug=self.debug,
-        ).fit(x_norm, y_norm)
+        if self._model is None:
+            self._model = build_tabpfn_surrogate(
+                n_objectives=self.n_objectives,
+                bin_edges=self._bins.edges,
+                tabpfn_device=self.tabpfn_device,
+                use_many_class_extension=self.use_many_class_extension,
+                random_state=self.random_state,
+                n_estimators=self.n_estimators,
+                debug=self.debug,
+            )
+        else:
+            for objective in self._model.objectives:
+                objective.debug = bool(self.debug)
+        self._model.fit(x_norm, y_norm)
         t_model_fit = time.perf_counter()
         if self.debug:
             print(

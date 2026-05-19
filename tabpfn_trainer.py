@@ -232,13 +232,26 @@ class TabPFNDiscSAEAEnv(DiscSAEAEnv):
 
     def _fit_surrogate(self):
         fit_started_at = time.perf_counter()
-        surrogate = build_surrogate_from_cfg(
+        existing_surrogate = None
+        if isinstance(self.surrogate, BatchedTabPFNSurrogate):
+            existing_surrogate = self.surrogate.backend
+        elif isinstance(self.surrogate, TabPFNMinMaxSurrogate):
+            existing_surrogate = self.surrogate
+
+        surrogate_backend = build_surrogate_from_cfg(
             self._surrogate_cfg(),
             archive_x=self.archive_x,
             archive_y=self.archive_y,
+            existing_surrogate=existing_surrogate,
         )
         if self.tabpfn_batcher is not None and _use_tabpfn_gpu_batch(self.cfg):
-            surrogate = BatchedTabPFNSurrogate(surrogate, self.tabpfn_batcher)
+            if isinstance(self.surrogate, BatchedTabPFNSurrogate):
+                self.surrogate.backend = surrogate_backend
+                surrogate = self.surrogate
+            else:
+                surrogate = BatchedTabPFNSurrogate(surrogate_backend, self.tabpfn_batcher)
+        else:
+            surrogate = surrogate_backend
         self.surrogate = surrogate
         if bool(self.cfg.get("debug", False)):
             print(

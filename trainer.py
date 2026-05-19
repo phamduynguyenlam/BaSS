@@ -157,7 +157,7 @@ def latin_hypercube_sample(n_samples, dim, lower, upper, seed):
     return (lower_arr + lhs * (upper_arr - lower_arr)).astype(np.float32)
 
 
-def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y):
+def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y, existing_surrogate=None):
     surrogate_name = str(cfg_dict.get("surrogate_model", "gp")).lower()
     surrogate_device = str(cfg_dict.get("surrogate_device", cfg_dict.get("device", "cpu")))
 
@@ -188,6 +188,7 @@ def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y):
             device=surrogate_device,
             n_estimators=int(cfg_dict.get("ensemble_model", 8)),
             debug=bool(cfg_dict.get("debug", False)),
+            existing_surrogate=existing_surrogate,
         )
 
     raise ValueError(f"Unsupported surrogate_model: {surrogate_name}")
@@ -592,10 +593,12 @@ class DiscSAEAEnv:
         return cfg_local
 
     def _fit_surrogate(self):
+        existing_surrogate = self.surrogate if self.cfg.get("surrogate_model", "gp") == "tabpfn" else None
         self.surrogate = build_surrogate_from_cfg(
             self._surrogate_cfg(),
             archive_x=self.archive_x,
             archive_y=self.archive_y,
+            existing_surrogate=existing_surrogate,
         )
         return self.surrogate
 

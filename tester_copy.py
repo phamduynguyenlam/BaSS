@@ -13,6 +13,7 @@ import numpy as np
 import torch
 
 from agents.disc import Disc
+from infill import ExpectedHypervolumeImprovement
 from nsga2_solver import run_surrogate_nsga2
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
@@ -57,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--softmax", action="store_true")
+    parser.add_argument("--compare_ehvi", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
     args = parser.parse_args()
@@ -98,7 +100,12 @@ def latin_hypercube_sample(
     return (lower_arr + lhs * (upper_arr - lower_arr)).astype(np.float32)
 
 
-def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: np.ndarray):
+def build_surrogate(
+    args: argparse.Namespace,
+    archive_x: np.ndarray,
+    archive_y: np.ndarray,
+    existing_surrogate: Any | None = None,
+):
     name = surrogate_model_name(args)
     if name == "gp":
         return fit_gp_surrogates(
@@ -114,6 +121,7 @@ def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: 
             archive_y=archive_y,
             device=str(args.device),
             n_estimators=int(args.ensemble_model),
+            existing_surrogate=existing_surrogate,
         )
 
     if name == "kan":
@@ -538,12 +546,19 @@ def plot_results(
     hv_history: list[float],
     archive_y: np.ndarray,
     true_pareto: np.ndarray | None,
+    run_tag: str | None = None,
 ) -> str:
     plot_path = args.plot_path
     if plot_path is None:
-        plot_path = str(Path("png") / f"test_disc_{args.problem.lower()}_seed{int(args.seed)}.png")
+        stem = f"test_disc_{args.problem.lower()}_seed{int(args.seed)}"
+        if run_tag:
+            stem = f"{stem}_{run_tag}"
+        plot_path = str(Path("png") / f"{stem}.png")
     else:
-        plot_path = str(Path(plot_path))
+        plot_file = Path(plot_path)
+        if run_tag:
+            plot_file = plot_file.with_name(f"{plot_file.stem}_{run_tag}{plot_file.suffix}")
+        plot_path = str(plot_file)
 
     plot_file = Path(plot_path)
     plot_file.parent.mkdir(parents=True, exist_ok=True)
@@ -613,6 +628,81 @@ def plot_results(
     return str(plot_file.resolve())
 
 
+def plot_compare_results(
+    *,
+    args: argparse.Namespace,
+    disc_fe_history: list[int],
+    disc_hv_history: list[float],
+    disc_archive_y: np.ndarray,
+    ehvi_fe_history: list[int],
+    ehvi_hv_history: list[float],
+    ehvi_archive_y: np.ndarray,
+    true_pareto: np.ndarray | None,
+) -> str:
+    plot_path = args.plot_path
+    if plot_path is None:
+        plot_path = str(Path("png") / f"test_disc_{args.problem.lower()}_seed{int(args.seed)}_compare.png")
+    else:
+        plot_file = Path(plot_path)
+        plot_file = plot_file.with_name(f"{plot_file.stem}_compare{plot_file.suffix}")
+        plot_path = str(plot_file)
+
+    plot_file = Path(plot_path)
+    plot_file.parent.mkdir(parents=True, exist_ok=True)
+
+    disc_front = pareto_front(disc_archive_y)
+    ehvi_front = pareto_front(ehvi_archive_y)
+    n_obj = int(disc_archive_y.shape[1])
+
+    fig = plt.figure(figsize=(13, 5))
+    ax_hv = fig.add_subplot(1, 2, 1)
+    if n_obj == 3:
+        ax_pf = fig.add_subplot(1, 2, 2, projection="3d")
+    else:
+        ax_pf = fig.add_subplot(1, 2, 2)
+
+    ax_hv.plot(disc_fe_history, disc_hv_history, marker="o", linewidth=1.8, markersize=4, label="DISC")
+    ax_hv.plot(ehvi_fe_history, ehvi_hv_history, marker="s", linewidth=1.8, markersize=4, label="EHVI")
+    ax_hv.set_xlabel("FE")
+    ax_hv.set_ylabel("Hypervolume")
+    ax_hv.set_title("HV Comparison")
+    ax_hv.grid(True, alpha=0.3)
+    ax_hv.legend()
+
+    if n_obj == 2:
+        ax_pf.scatter(disc_archive_y[:, 0], disc_archive_y[:, 1], s=14, alpha=0.22, label="DISC Archive")
+        ax_pf.scatter(ehvi_archive_y[:, 0], ehvi_archive_y[:, 1], s=14, alpha=0.22, label="EHVI Archive")
+        ax_pf.scatter(disc_front[:, 0], disc_front[:, 1], s=28, alpha=0.95, marker="o", label="DISC PF")
+        ax_pf.scatter(ehvi_front[:, 0], ehvi_front[:, 1], s=28, alpha=0.95, marker="x", label="EHVI PF")
+        if true_pareto is not None and true_pareto.shape[1] >= 2:
+            order = np.argsort(true_pareto[:, 0])
+            ax_pf.plot(true_pareto[order, 0], true_pareto[order, 1], linewidth=2.0, label="True PF")
+        ax_pf.set_xlabel("f1")
+        ax_pf.set_ylabel("f2")
+        ax_pf.grid(True, alpha=0.3)
+    elif n_obj == 3:
+        ax_pf.scatter(disc_archive_y[:, 0], disc_archive_y[:, 1], disc_archive_y[:, 2], s=12, alpha=0.18, label="DISC Archive")
+        ax_pf.scatter(ehvi_archive_y[:, 0], ehvi_archive_y[:, 1], ehvi_archive_y[:, 2], s=12, alpha=0.18, label="EHVI Archive")
+        ax_pf.scatter(disc_front[:, 0], disc_front[:, 1], disc_front[:, 2], s=26, alpha=0.95, marker="o", label="DISC PF")
+        ax_pf.scatter(ehvi_front[:, 0], ehvi_front[:, 1], ehvi_front[:, 2], s=26, alpha=0.95, marker="x", label="EHVI PF")
+        if true_pareto is not None and true_pareto.shape[1] >= 3:
+            ax_pf.scatter(true_pareto[:, 0], true_pareto[:, 1], true_pareto[:, 2], s=8, alpha=0.20, label="True PF")
+        ax_pf.set_xlabel("f1")
+        ax_pf.set_ylabel("f2")
+        ax_pf.set_zlabel("f3")
+    else:
+        raise ValueError(f"plot_compare_results currently supports only 2 or 3 objectives, got n_obj={n_obj}.")
+
+    ax_pf.set_title(f"{args.problem} Archive Comparison")
+    ax_pf.legend()
+
+    fig.tight_layout()
+    fig.savefig(plot_file, dpi=180, bbox_inches="tight")
+    plt.show()
+    plt.close(fig)
+    return str(plot_file.resolve())
+
+
 def save_npy_outputs(
     *,
     args: argparse.Namespace,
@@ -621,10 +711,13 @@ def save_npy_outputs(
     final_front: np.ndarray,
     fe_history: list[int],
     hv_history: list[float],
+    run_tag: str | None = None,
 ) -> dict[str, str]:
     out_dir = Path("npy")
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"test_disc_{args.problem.lower()}_seed{int(args.seed)}"
+    if run_tag:
+        stem = f"{stem}_{run_tag}"
 
     paths = {
         "archive_x": out_dir / f"{stem}_archive_x.npy",
@@ -643,40 +736,35 @@ def save_npy_outputs(
     return {key: str(path.resolve()) for key, path in paths.items()}
 
 
-def main() -> None:
-    args = parse_args()
-    set_seed(int(args.seed))
-
-    problem = make_problem(args.problem, dim=int(args.dim))
+def run_policy_rollout(
+    *,
+    args: argparse.Namespace,
+    problem,
+    nsga2_problem,
+    ref_point: np.ndarray,
+    true_pareto: np.ndarray | None,
+    archive_x_init: np.ndarray,
+    archive_y_init: np.ndarray,
+    policy_name: str,
+    disc: Disc | None = None,
+    infill_criterion: ExpectedHypervolumeImprovement | None = None,
+    compare_mode: bool = False,
+    make_plot: bool = True,
+) -> tuple[dict[str, Any], np.ndarray]:
+    archive_x = np.asarray(archive_x_init, dtype=np.float32).copy()
+    archive_y = np.asarray(archive_y_init, dtype=np.float32).copy()
     n_evo_steps = int(args.max_fe) - int(args.init_fe)
-
-    archive_x = latin_hypercube_sample(
-        n_samples=int(args.init_fe),
-        dim=int(args.dim),
-        lower=problem.lower,
-        upper=problem.upper,
-        seed=int(args.seed),
-    )
-    archive_y = np.asarray(problem.evaluate(archive_x), dtype=np.float32)
-    n_obj = int(archive_y.shape[1])
-    ref_point = get_reference_point(args.problem, n_obj=n_obj)
-    nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
-    true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
     fe_history = [int(args.init_fe)]
     hv_history = [float(hypervolume(archive_y, ref_point))]
-
-    print(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
-    print(f"iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
-
-    disc = build_disc(args, map_location=str(args.device))
     history: list[StepRecord] = []
     step_rewards: list[float] = []
-    disc_forward_times_sec: list[float] = []
+    selection_times_sec: list[float] = []
 
-    # Pretrain surrogate on the initial archive (default: 80 points).
+    prefix = f"[{policy_name}] " if compare_mode else ""
+    print(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
+
     surrogate = build_surrogate(args, archive_x, archive_y)
     for step in range(n_evo_steps):
-
         offspring_pop_size = int(args.offspring_size)
         nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
         offspring_x, offspring_pred = run_surrogate_nsga2(
@@ -697,28 +785,47 @@ def main() -> None:
             surrogate=surrogate,
         )
 
-        progress = float(step) / float(max(n_evo_steps - 1, 1))
-        disc_forward_started_at = time.perf_counter()
-        with torch.no_grad():
-            out = disc(
-                x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
-                y_true=torch.from_numpy(archive_y).to(device=args.device, dtype=torch.float32),
-                x_sur=torch.from_numpy(offspring_x).to(device=args.device, dtype=torch.float32),
-                y_sur=torch.from_numpy(offspring_pred).to(device=args.device, dtype=torch.float32),
-                sigma_sur=torch.from_numpy(offspring_sigma).to(device=args.device, dtype=torch.float32),
-                progress=progress,
-                lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
-                upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
-                decode_type="greedy" if bool(args.softmax) else "epsilon_greedy",
-                epsilon=0.05,
+        if policy_name.lower() == "disc":
+            if disc is None:
+                raise ValueError("DISC rollout requires a built disc model.")
+            progress = float(step) / float(max(n_evo_steps - 1, 1))
+            selection_started_at = time.perf_counter()
+            with torch.no_grad():
+                out = disc(
+                    x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
+                    y_true=torch.from_numpy(archive_y).to(device=args.device, dtype=torch.float32),
+                    x_sur=torch.from_numpy(offspring_x).to(device=args.device, dtype=torch.float32),
+                    y_sur=torch.from_numpy(offspring_pred).to(device=args.device, dtype=torch.float32),
+                    sigma_sur=torch.from_numpy(offspring_sigma).to(device=args.device, dtype=torch.float32),
+                    progress=progress,
+                    lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
+                    upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
+                    decode_type="greedy" if bool(args.softmax) else "epsilon_greedy",
+                    epsilon=0.05,
+                )
+                logits = out["logits"].reshape(-1)
+            if bool(args.softmax):
+                selected_idx, _ = sample_offspring_index_softmax(logits)
+            else:
+                selected_idx, _ = select_offspring_index_epsilon_greedy(logits, epsilon=0.05)
+            selection_sec = time.perf_counter() - selection_started_at
+            selection_label = "disc_forward_sec"
+        elif policy_name.lower() == "ehvi":
+            if infill_criterion is None:
+                raise ValueError("EHVI rollout requires an infill criterion.")
+            selection_started_at = time.perf_counter()
+            selected_idx, _ = infill_criterion.select_index(
+                archive_y=archive_y,
+                candidate_mean=offspring_pred,
+                candidate_std=offspring_sigma,
+                seed=int(args.seed) + step,
             )
-            logits = out["logits"].reshape(-1)
-        disc_forward_sec = time.perf_counter() - disc_forward_started_at
-        disc_forward_times_sec.append(float(disc_forward_sec))
-        if bool(args.softmax):
-            selected_idx, q_values = sample_offspring_index_softmax(logits)
+            selection_sec = time.perf_counter() - selection_started_at
+            selection_label = "ehvi_select_sec"
         else:
-            selected_idx, q_values = select_offspring_index_epsilon_greedy(logits, epsilon=0.05)
+            raise ValueError(f"Unsupported policy_name: {policy_name}")
+
+        selection_times_sec.append(float(selection_sec))
         selected_x = offspring_x[selected_idx : selected_idx + 1]
         selected_pred = offspring_pred[selected_idx]
         selected_true = np.asarray(problem.evaluate(selected_x), dtype=np.float32)
@@ -754,21 +861,25 @@ def main() -> None:
         step_rewards.append(step_reward)
 
         print(
-            f"iter {record.step} | front = {front_size} | "
+            f"{prefix}iter {record.step} | front = {front_size} | "
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f} | "
-            f"disc_forward_sec = {disc_forward_sec:.3f}"
+            f"{selection_label} = {selection_sec:.3f}"
         )
-        # Refit surrogate after admitting one new true-evaluated sample.
-        surrogate = build_surrogate(args, archive_x, archive_y)
+        reuse_surrogate = surrogate if isinstance(surrogate, TabPFNMinMaxSurrogate) else None
+        surrogate = build_surrogate(args, archive_x, archive_y, existing_surrogate=reuse_surrogate)
 
     final_front = pareto_front(archive_y)
-    plot_path = plot_results(
-        args=args,
-        fe_history=fe_history,
-        hv_history=hv_history,
-        archive_y=archive_y,
-        true_pareto=true_pareto,
-    )
+    run_tag = None if not compare_mode else policy_name.lower()
+    plot_path = None
+    if make_plot:
+        plot_path = plot_results(
+            args=args,
+            fe_history=fe_history,
+            hv_history=hv_history,
+            archive_y=archive_y,
+            true_pareto=true_pareto,
+            run_tag=run_tag,
+        )
     npy_paths = save_npy_outputs(
         args=args,
         archive_x=archive_x,
@@ -776,8 +887,11 @@ def main() -> None:
         final_front=final_front,
         fe_history=fe_history,
         hv_history=hv_history,
+        run_tag=run_tag,
     )
+
     summary = {
+        "policy": policy_name,
         "problem": args.problem,
         "dim": int(args.dim),
         "seed": int(args.seed),
@@ -792,20 +906,113 @@ def main() -> None:
         "archive_size": int(archive_x.shape[0]),
         "final_hv": float(hypervolume(archive_y, ref_point)),
         "mean_reward_40_steps": float(np.mean(step_rewards)) if len(step_rewards) > 0 else 0.0,
-        "mean_disc_forward_sec": float(np.mean(disc_forward_times_sec)) if len(disc_forward_times_sec) > 0 else 0.0,
+        "mean_select_sec": float(np.mean(selection_times_sec)) if len(selection_times_sec) > 0 else 0.0,
         "final_front_size": int(final_front.shape[0]),
         "final_front": final_front.astype(float).tolist(),
         "plot_path": plot_path,
         "npy_paths": npy_paths,
         "history": [asdict(item) for item in history],
     }
+    if policy_name.lower() == "disc":
+        summary["mean_disc_forward_sec"] = summary["mean_select_sec"]
+    if policy_name.lower() == "ehvi":
+        summary["mean_ehvi_select_sec"] = summary["mean_select_sec"]
+    return summary, archive_y
+
+
+def main() -> None:
+    args = parse_args()
+    set_seed(int(args.seed))
+
+    problem = make_problem(args.problem, dim=int(args.dim))
+    archive_x_init = latin_hypercube_sample(
+        n_samples=int(args.init_fe),
+        dim=int(args.dim),
+        lower=problem.lower,
+        upper=problem.upper,
+        seed=int(args.seed),
+    )
+    archive_y_init = np.asarray(problem.evaluate(archive_x_init), dtype=np.float32)
+    n_obj = int(archive_y_init.shape[1])
+    ref_point = get_reference_point(args.problem, n_obj=n_obj)
+    nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
+    true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
+    print(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
+    disc = build_disc(args, map_location=str(args.device))
+    disc_summary, disc_archive_y = run_policy_rollout(
+        args=args,
+        problem=problem,
+        nsga2_problem=nsga2_problem,
+        ref_point=ref_point,
+        true_pareto=true_pareto,
+        archive_x_init=archive_x_init,
+        archive_y_init=archive_y_init,
+        policy_name="DISC",
+        disc=disc,
+        compare_mode=bool(args.compare_ehvi),
+        make_plot=not bool(args.compare_ehvi),
+    )
+
+    if bool(args.compare_ehvi):
+        ehvi_summary, ehvi_archive_y = run_policy_rollout(
+            args=args,
+            problem=problem,
+            nsga2_problem=nsga2_problem,
+            ref_point=ref_point,
+            true_pareto=true_pareto,
+            archive_x_init=archive_x_init,
+            archive_y_init=archive_y_init,
+            policy_name="EHVI",
+            infill_criterion=ExpectedHypervolumeImprovement(ref_point=ref_point, n_samples=64),
+            compare_mode=True,
+            make_plot=False,
+        )
+        compare_plot_path = plot_compare_results(
+            args=args,
+            disc_fe_history=disc_summary["npy_paths"] and np.load(disc_summary["npy_paths"]["fe_history"]).tolist(),
+            disc_hv_history=np.load(disc_summary["npy_paths"]["hv_history"]).tolist(),
+            disc_archive_y=disc_archive_y,
+            ehvi_fe_history=np.load(ehvi_summary["npy_paths"]["fe_history"]).tolist(),
+            ehvi_hv_history=np.load(ehvi_summary["npy_paths"]["hv_history"]).tolist(),
+            ehvi_archive_y=ehvi_archive_y,
+            true_pareto=true_pareto,
+        )
+        disc_summary["plot_path"] = compare_plot_path
+        ehvi_summary["plot_path"] = compare_plot_path
+        summary: dict[str, Any] = {
+            "compare_ehvi": True,
+            "compare_plot_path": compare_plot_path,
+            "disc": disc_summary,
+            "ehvi": ehvi_summary,
+        }
+    else:
+        summary = disc_summary
 
     if args.output_json:
         out_path = Path(args.output_json)
         out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    print(f"mean reward ({n_evo_steps} steps) = {summary['mean_reward_40_steps']:.6f}")
-    print(json.dumps({k: v for k, v in summary.items() if k not in {"history", "final_front"}}, indent=2))
+    if bool(args.compare_ehvi):
+        print(
+            "compare summary | "
+            f"disc_final_hv = {disc_summary['final_hv']:.6f} | "
+            f"ehvi_final_hv = {ehvi_summary['final_hv']:.6f} | "
+            f"disc_mean_reward = {disc_summary['mean_reward_40_steps']:.6f} | "
+            f"ehvi_mean_reward = {ehvi_summary['mean_reward_40_steps']:.6f}"
+        )
+        print(
+            json.dumps(
+                {
+                    "compare_ehvi": True,
+                    "disc": {k: v for k, v in disc_summary.items() if k not in {"history", "final_front"}},
+                    "ehvi": {k: v for k, v in ehvi_summary.items() if k not in {"history", "final_front"}},
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"mean reward ({disc_summary['evolution_fe']} steps) = {disc_summary['mean_reward_40_steps']:.6f}")
+        print(json.dumps({k: v for k, v in disc_summary.items() if k not in {"history", "final_front"}}, indent=2))
 
 
 if __name__ == "__main__":
