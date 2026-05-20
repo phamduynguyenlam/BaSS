@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kan_steps", type=int, default=25)
     parser.add_argument("--kan_hidden_width", type=int, default=10)
     parser.add_argument("--kan_grid", type=int, default=5)
-    parser.add_argument("--hidden_dim", type=int, default=128)
+    parser.add_argument("--hidden_dim", type=int, default=64)
     parser.add_argument("--n_heads", type=int, default=8)
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
@@ -764,7 +764,13 @@ def run_policy_rollout(
     print(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
 
     surrogate = build_surrogate(args, archive_x, archive_y)
+    surrogate_needs_refit = False
     for step in range(n_evo_steps):
+        if surrogate_needs_refit:
+            reuse_surrogate = surrogate if isinstance(surrogate, TabPFNMinMaxSurrogate) else None
+            surrogate = build_surrogate(args, archive_x, archive_y, existing_surrogate=reuse_surrogate)
+            surrogate_needs_refit = False
+
         offspring_pop_size = int(args.offspring_size)
         nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
         offspring_x, offspring_pred = run_surrogate_nsga2(
@@ -865,8 +871,7 @@ def run_policy_rollout(
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f} | "
             f"{selection_label} = {selection_sec:.3f}"
         )
-        reuse_surrogate = surrogate if isinstance(surrogate, TabPFNMinMaxSurrogate) else None
-        surrogate = build_surrogate(args, archive_x, archive_y, existing_surrogate=reuse_surrogate)
+        surrogate_needs_refit = True
 
     final_front = pareto_front(archive_y)
     run_tag = None if not compare_mode else policy_name.lower()

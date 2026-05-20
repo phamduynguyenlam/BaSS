@@ -324,21 +324,8 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
 
         self.t += 1
         done = self.t >= self.max_steps
-        surrogate_refit_sec = 0.0
-        tabpfn_refit_sec = 0.0
-        if not done:
-            surrogate_refit_started_at = time.perf_counter()
-            self._fit_surrogate()
-            surrogate_refit_sec = time.perf_counter() - surrogate_refit_started_at
-            if bool(self.cfg.get("debug", False)):
-                print(
-                    f"[refit] env={env_key(self.problem_name, self.dim)} seed={self.seed} step={self.t:03d} "
-                    f"archive={int(self.archive_x.shape[0])} obj={int(self.archive_y.shape[1])} dim={int(self.archive_x.shape[1])} "
-                    f"time={surrogate_refit_sec:.4f}s"
-                )
-            if str(self.cfg.get("surrogate_model", "")).lower() == "tabpfn":
-                tabpfn_refit_sec = surrogate_refit_sec
-        return float(reward), bool(done), float(surrogate_refit_sec), float(tabpfn_refit_sec)
+        self._surrogate_dirty = bool(not done)
+        return float(reward), bool(done), 0.0, 0.0
 
 
 def _initial_nsga2_population(archive_x: np.ndarray, pop_size: int, seed: int) -> np.ndarray:
@@ -430,6 +417,20 @@ def _refresh_offspring_synchronized(
 ) -> None:
     if len(envs) == 0:
         return
+
+    dirty_envs = [env for env in envs if getattr(env, "_surrogate_dirty", False) or env.surrogate is None]
+    if dirty_envs:
+        refit_started_at = time.perf_counter()
+        for env in dirty_envs:
+            env._fit_surrogate()
+        refit_wall_sec = time.perf_counter() - refit_started_at
+        if log is not None:
+            log(
+                f"[REFIT sync] {phase_label} | "
+                f"envs={len(envs)} | "
+                f"refit_envs={len(dirty_envs)} | "
+                f"refit_norm_wall_sec={refit_wall_sec:.3f}"
+            )
 
     surrogates = [env.surrogate for env in envs]
     if not all(isinstance(surrogate, TabPFNMinMaxSurrogate) for surrogate in surrogates):
@@ -555,22 +556,17 @@ def rollout_episode_batch_synchronized(
         step_dones: list[bool] = []
         step_rewards: list[float] = []
         step_post_action_started_at = time.perf_counter()
-        step_surrogate_refit_sec = 0.0
-        step_tabpfn_refit_sec = 0.0
         for env, action in zip(envs, actions):
-            reward, done, surrogate_refit_sec, tabpfn_refit_sec = env.apply_action_without_refresh(action)
+            reward, done, _surrogate_refit_sec, _tabpfn_refit_sec = env.apply_action_without_refresh(action)
             step_rewards.append(float(reward))
             step_dones.append(bool(done))
-            step_surrogate_refit_sec += float(surrogate_refit_sec)
-            step_tabpfn_refit_sec += float(tabpfn_refit_sec)
         step_post_action_total_sec = time.perf_counter() - step_post_action_started_at
         if debug_log is not None and len(envs) > 0:
             debug_log(
                 f"[ENV sync] step={envs[0].t:03d} | "
                 f"envs={len(envs)} | "
-                f"surrogate_refit_sec={step_surrogate_refit_sec:.3f} | "
-                f"tabpfn_refit_sec={step_tabpfn_refit_sec:.3f} | "
-                f"post_action_total_sec={step_post_action_total_sec:.3f}"
+                f"update_eval_total_sec={step_post_action_total_sec:.3f} | "
+                f"surrogate_refit=deferred"
             )
 
         active_envs = [env for env, done in zip(envs, step_dones) if not done]
@@ -1007,10 +1003,16 @@ def train_disc_ddqn_tabpfn(
                 continue
 
             update_metrics_list = []
+            total_minibatch_sample_cpu_sec = 0.0
+            total_minibatch_to_gpu_sec = 0.0
             agent.train()
             for _ in range(int(cfg.updates_per_epoch)):
+                minibatch_sample_started_at = time.perf_counter()
                 batch = replay.sample(cfg.batch_size)
+                minibatch_sample_cpu_sec = time.perf_counter() - minibatch_sample_started_at
                 loss, ddqn_metrics = compute_ddqn_loss(agent, target_agent, batch, cfg)
+                total_minibatch_sample_cpu_sec += float(minibatch_sample_cpu_sec)
+                total_minibatch_to_gpu_sec += float(ddqn_metrics.get("batch_to_device_sec", 0.0))
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -1051,6 +1053,13 @@ def train_disc_ddqn_tabpfn(
                 int(obj): float(np.mean([m.get("shape_group_detail", {}).get(int(obj), 0) for m in update_metrics_list]))
                 for obj in group_keys
             }
+            if bool(cfg.debug):
+                log(
+                    f"[Epoch {epoch_id:04d}] minibatch debug | "
+                    f"updates={cfg.updates_per_epoch} | "
+                    f"sample_cpu_total_sec={total_minibatch_sample_cpu_sec:.3f} | "
+                    f"to_gpu_total_sec={total_minibatch_to_gpu_sec:.3f}"
+                )
 
             log(
                 f"[Epoch {epoch_id:04d}] "

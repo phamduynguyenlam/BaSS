@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from agents.disc import Disc
+from agents.disc import Disc, DiscAF
 from nsga2_solver import run_surrogate_nsga2
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kan_steps", type=int, default=25)
     parser.add_argument("--kan_hidden_width", type=int, default=10)
     parser.add_argument("--kan_grid", type=int, default=5)
-    parser.add_argument("--hidden_dim", type=int, default=128)
+    parser.add_argument("--hidden_dim", type=int, default=64)
     parser.add_argument("--n_heads", type=int, default=8)
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
@@ -61,6 +61,15 @@ def parse_args() -> argparse.Namespace:
 def set_seed(seed: int) -> None:
     np.random.seed(int(seed))
     torch.manual_seed(int(seed))
+
+
+def resolve_agent_cls(agent_name: str):
+    name = str(agent_name).strip().lower()
+    if name == "disc":
+        return Disc
+    if name == "disc_af":
+        return DiscAF
+    raise ValueError(f"Unsupported agent_name: {agent_name}")
 
 
 def latin_hypercube_sample(
@@ -191,8 +200,10 @@ def build_disc(
     args: argparse.Namespace,
     *,
     map_location: str,
+    agent_name: str = "disc",
 ) -> Disc:
-    disc = Disc(
+    agent_cls = resolve_agent_cls(agent_name)
+    disc = agent_cls(
         hidden_dim=int(args.hidden_dim),
         n_heads=int(args.n_heads),
         ff_dim=int(args.ff_dim),
@@ -284,9 +295,10 @@ def plot_results(
     archive_y: np.ndarray,
     true_pareto: np.ndarray | None,
 ) -> str:
+    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
     plot_path = args.plot_path
     if plot_path is None:
-        plot_path = str(Path("png") / f"test_disc_{args.problem.lower()}_seed{int(args.seed)}.png")
+        plot_path = str(Path("png") / f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}.png")
     else:
         plot_path = str(Path(plot_path))
 
@@ -369,7 +381,8 @@ def save_npy_outputs(
 ) -> dict[str, str]:
     out_dir = Path("npy")
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"test_disc_{args.problem.lower()}_seed{int(args.seed)}"
+    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
+    stem = f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}"
 
     paths = {
         "archive_x": out_dir / f"{stem}_archive_x.npy",
@@ -388,8 +401,9 @@ def save_npy_outputs(
     return {key: str(path.resolve()) for key, path in paths.items()}
 
 
-def main() -> None:
+def main(agent_name: str = "disc") -> None:
     args = parse_args()
+    args.agent_name = str(agent_name).lower()
     set_seed(int(args.seed))
 
     problem = make_problem(args.problem, dim=int(args.dim))
@@ -413,7 +427,7 @@ def main() -> None:
     print(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
     print(f"iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
 
-    disc = build_disc(args, map_location=str(args.device))
+    disc = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
     history: list[StepRecord] = []
     step_rewards: list[float] = []
 
@@ -522,6 +536,7 @@ def main() -> None:
         "init_fe": int(args.init_fe),
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
+        "agent_name": args.agent_name,
         "agent_pth": args.agent_pth,
         "random_model": bool(args.random_model),
         "reference_point": ref_point.astype(float).tolist(),

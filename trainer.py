@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-from agents.disc import Disc
+from agents.disc import Disc, DiscAF
 from nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
@@ -48,7 +48,7 @@ class TrainConfig:
     epsilon_start: float = 0.3
     epsilon_end: float = 0.05
     epsilon_decay_iters: int = 10
-    hidden_dim: int = 128
+    hidden_dim: int = 64
     n_heads: int = 8
     ff_dim: int = 256
     dropout: float = 0.0
@@ -68,6 +68,7 @@ class TrainConfig:
     rollout_device: str = "cpu"
     surrogate_device: str = "cpu"
     ensemble_model: int = 8
+    agent_name: str = "disc"
 
 
 class ReplayBuffer:
@@ -99,6 +100,15 @@ def to_tensor(x, device):
 
 def clone_state_dict_cpu(model):
     return {k: v.detach().cpu() for k, v in model.state_dict().items()}
+
+
+def resolve_agent_cls(agent_name):
+    name = str(agent_name).strip().lower()
+    if name == "disc":
+        return Disc
+    if name == "disc_af":
+        return DiscAF
+    raise ValueError(f"Unsupported agent_name: {agent_name}")
 
 
 def select_action_from_output(out):
@@ -311,6 +321,7 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
     ) = batch
 
     device = cfg.device
+    batch_to_device_started_at = time.perf_counter()
     archive_mask = torch.as_tensor(build_row_mask(x_true), dtype=torch.bool, device=device)
     candidate_mask = torch.as_tensor(build_row_mask(x_sur), dtype=torch.bool, device=device)
     next_archive_mask = torch.as_tensor(build_row_mask(next_x_true), dtype=torch.bool, device=device)
@@ -336,6 +347,7 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
     next_y_sur = to_tensor(pad_stack_rows(next_y_sur), device)
     next_sigma_sur = to_tensor(pad_stack_rows(next_sigma_sur), device)
     next_progress = to_tensor(np.asarray(next_progress).reshape(-1, 1), device)
+    batch_to_device_sec = time.perf_counter() - batch_to_device_started_at
 
     out = agent(
         x_true=x_true,
@@ -397,6 +409,7 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
         "td_error_mean": td_error.detach().mean().item(),
         "td_error_std": td_error.detach().std(unbiased=False).item() if td_error.numel() > 1 else 0.0,
         "reward_mean": rewards.mean().item(),
+        "batch_to_device_sec": float(batch_to_device_sec),
     }
     return loss, metrics, len(x_true)
 
@@ -434,6 +447,7 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
     total_td_error_mean = 0.0
     total_td_error_std = 0.0
     total_r_mean = 0.0
+    total_batch_to_device_sec = 0.0
     weighted_loss = None
     group_sizes = []
     group_objectives = []
@@ -479,6 +493,7 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
         total_td_error_mean += float(group_metrics["td_error_mean"]) * float(group_count)
         total_td_error_std += float(group_metrics["td_error_std"]) * float(group_count)
         total_r_mean += float(group_metrics["reward_mean"]) * float(group_count)
+        total_batch_to_device_sec += float(group_metrics["batch_to_device_sec"])
 
         scaled_loss = group_loss * (float(group_count) / float(len(objective_counts)))
         weighted_loss = scaled_loss if weighted_loss is None else (weighted_loss + scaled_loss)
@@ -493,6 +508,7 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
         "td_error_mean": total_td_error_mean / total_count,
         "td_error_std": total_td_error_std / total_count,
         "reward_mean": total_r_mean / total_count,
+        "batch_to_device_sec": total_batch_to_device_sec,
         "shape_group": len(group_sizes),
         "group_sizes": group_sizes,
         "group_objectives": group_objectives,
@@ -583,6 +599,7 @@ class DiscSAEAEnv:
         self.nsga2_problem = None
         self.init_hv = None
         self.surrogate = None
+        self._surrogate_dirty = False
 
     def _progress(self):
         return float(self.t) / float(max(self.max_steps - 1, 1))
@@ -600,12 +617,16 @@ class DiscSAEAEnv:
             archive_y=self.archive_y,
             existing_surrogate=existing_surrogate,
         )
+        self._surrogate_dirty = False
+        return self.surrogate
+
+    def _ensure_surrogate_ready(self):
+        if self.surrogate is None or bool(self._surrogate_dirty):
+            self._fit_surrogate()
         return self.surrogate
 
     def _refresh_offspring(self):
-        if self.surrogate is None:
-            raise RuntimeError("Surrogate is not initialized. Call _fit_surrogate() before refreshing offspring.")
-        surrogate = self.surrogate
+        surrogate = self._ensure_surrogate_ready()
         nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
         offspring_x, offspring_y = run_surrogate_nsga2(
             gps=nsga2_models,
@@ -677,9 +698,9 @@ class DiscSAEAEnv:
 
         self.t += 1
         done = self.t >= self.max_steps
-        # Refit surrogate after admitting the new true-evaluated sample.
-        self._fit_surrogate()
-        self._refresh_offspring()
+        self._surrogate_dirty = bool(not done)
+        if not done:
+            self._refresh_offspring()
         return self._build_state(), float(reward), bool(done)
 
     def current_hv(self):
@@ -688,8 +709,8 @@ class DiscSAEAEnv:
 
 def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, epsilon):
     device = str(cfg_dict.get("rollout_device", "cpu"))
-
-    agent = Disc(
+    agent_cls = resolve_agent_cls(cfg_dict.get("agent_name", "disc"))
+    agent = agent_cls(
         hidden_dim=cfg_dict["hidden_dim"],
         n_heads=cfg_dict["n_heads"],
         ff_dim=cfg_dict["ff_dim"],
@@ -787,9 +808,11 @@ def save_training_checkpoint(
     os.makedirs(cfg.weight_dir, exist_ok=True)
     rs_tag = f"rs{int(cfg.reward_scheme)}"
     problem_tag = str(problem_name).lower()
+    agent_tag = str(getattr(cfg, "agent_name", "disc")).lower()
+    file_prefix = f"{agent_tag}_problem_{problem_tag}_{rs_tag}"
 
     if mean_reward > best_reward:
-        best_path = os.path.join(cfg.weight_dir, f"disc_problem_{problem_tag}_{rs_tag}_best_reward.pth")
+        best_path = os.path.join(cfg.weight_dir, f"{file_prefix}_best_reward.pth")
         state_dict_to_save = best_state_dict if best_state_dict is not None else agent.state_dict()
         torch.save(
             {
@@ -804,7 +827,7 @@ def save_training_checkpoint(
         best_reward = float(mean_reward)
 
     if int(epoch) % 5 == 0:
-        epoch_path = os.path.join(cfg.weight_dir, f"disc_problem_{problem_tag}_{rs_tag}_epoch_{int(epoch)}.pth")
+        epoch_path = os.path.join(cfg.weight_dir, f"{file_prefix}_epoch_{int(epoch)}.pth")
         torch.save(
             {
                 "epoch": int(epoch),
@@ -834,6 +857,7 @@ def train_disc_ddqn_ray(
     rollout_device="cpu",
     surrogate_device="cpu",
     use_ray=False,
+    agent_name="disc",
 ):
     cfg = TrainConfig()
     if epoch is not None:
@@ -851,6 +875,7 @@ def train_disc_ddqn_ray(
         cfg.device = str(device)
     cfg.rollout_device = str(rollout_device)
     cfg.surrogate_device = str(surrogate_device)
+    cfg.agent_name = str(agent_name).lower()
     if num_workers is not None:
         cfg.num_workers = int(num_workers)
     if cfg.surrogate_model not in {"gp", "kan", "tabpfn"}:
@@ -867,9 +892,10 @@ def train_disc_ddqn_ray(
     cfg_dict = cfg.__dict__.copy()
     os.makedirs("training_logs", exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_prefix = f"{cfg.agent_name}_trainer" if cfg.agent_name != "disc" else "trainer"
     log_path = os.path.join(
         "training_logs",
-        f"trainer_{cfg.heldout_problem.lower()}_set{cfg.training_set}_{ts}.txt",
+        f"{log_prefix}_{cfg.heldout_problem.lower()}_set{cfg.training_set}_{ts}.txt",
     )
     log_fp = open(log_path, "a", encoding="utf-8", buffering=1)
 
@@ -891,7 +917,8 @@ def train_disc_ddqn_ray(
     else:
         executor = ProcessPoolExecutor(max_workers=actual_num_workers)
 
-    agent = Disc(
+    agent_cls = resolve_agent_cls(cfg.agent_name)
+    agent = agent_cls(
         hidden_dim=cfg.hidden_dim,
         n_heads=cfg.n_heads,
         ff_dim=cfg.ff_dim,
@@ -913,6 +940,7 @@ def train_disc_ddqn_ray(
         f"envs={len(env_specs)} | "
         f"workers={actual_num_workers} | "
         f"reward_scheme={cfg.reward_scheme} | "
+        f"agent={cfg.agent_name} | "
         f"policy={cfg.policy_mode} | "
         f"surrogate={cfg.surrogate_model} | "
         f"sampling_backend={'ray' if use_ray else 'process_pool'} | "
@@ -940,6 +968,7 @@ def train_disc_ddqn_ray(
             f"set={cfg.training_set} | "
             f"heldout={cfg.heldout_problem} | "
             f"envs_active={len(env_specs)}/{len(env_specs)} | "
+            f"agent={cfg.agent_name} | "
             f"surrogate={cfg.surrogate_model} | "
             f"sur_steps={cfg.surrogate_nsga_steps} | "
             f"eps={epsilon:.3f}"
@@ -1069,10 +1098,16 @@ def train_disc_ddqn_ray(
             continue
 
         update_metrics_list = []
+        total_minibatch_sample_cpu_sec = 0.0
+        total_minibatch_to_gpu_sec = 0.0
         agent.train()
         for update_idx in range(int(cfg.updates_per_epoch)):
+            minibatch_sample_started_at = time.perf_counter()
             batch = replay.sample(cfg.batch_size)
+            minibatch_sample_cpu_sec = time.perf_counter() - minibatch_sample_started_at
             loss, ddqn_metrics = compute_ddqn_loss(agent, target_agent, batch, cfg)
+            total_minibatch_sample_cpu_sec += float(minibatch_sample_cpu_sec)
+            total_minibatch_to_gpu_sec += float(ddqn_metrics.get("batch_to_device_sec", 0.0))
 
             optimizer.zero_grad()
             loss.backward()
@@ -1137,6 +1172,13 @@ def train_disc_ddqn_ray(
             f"batch_r={mean_update_metrics['reward_mean']:.4f} | "
             f"ep_return_per_fe={mean_ep_reward:.4f}"
         )
+        if bool(getattr(cfg, "debug", False)):
+            log(
+                f"[Epoch {epoch:04d}] minibatch debug | "
+                f"updates={cfg.updates_per_epoch} | "
+                f"sample_cpu_total_sec={total_minibatch_sample_cpu_sec:.3f} | "
+                f"to_gpu_total_sec={total_minibatch_to_gpu_sec:.3f}"
+            )
         log(
             f"epoch {epoch} done | mean reward/FE = {mean_ep_reward:.4f} | "
             f"set = {cfg.training_set} | heldout = {cfg.heldout_problem} | "
