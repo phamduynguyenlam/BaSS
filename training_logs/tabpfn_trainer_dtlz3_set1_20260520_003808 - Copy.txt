@@ -1,0 +1,174 @@
+Training config | heldout=DTLZ3 | training_set=1 | envs=24 | workers=24 | reward_scheme=1 | policy=epsilon_greedy | surrogate=tabpfn | ensemble_model=4 | sampling_backend=tabpfn_gpu_sync | epochs=50 | sur_steps=20 | updates_per_epoch=80 | train_device=cuda | rollout_device=cpu | surrogate_device=cuda | lr=1.0e-04 | batch_size=64 | replay_size=50000 | gamma=0.9900 | target_update=20 | log_path=training_logs\tabpfn_trainer_dtlz3_set1_20260520_003808.txt
+[Epoch 0001] start | set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | eps=0.300
+[Epoch 0001] interact done | workers=24 | episodes=24 | interact_time_sec=1593.444
+DTLZ2-15D epoch 1 done, mean reward/FE = -0.1452, init HV = 18.663186, final HV = 19.247268
+DTLZ2-20D epoch 1 done, mean reward/FE = -0.0920, init HV = 15.117093, final HV = 16.022229
+DTLZ2-25D epoch 1 done, mean reward/FE = -0.0095, init HV = 12.220869, final HV = 13.945676
+DTLZ4-15D epoch 1 done, mean reward/FE = -0.2209, init HV = 11.098277, final HV = 13.243665
+DTLZ4-20D epoch 1 done, mean reward/FE = -0.9490, init HV = 10.176973, final HV = 10.176973
+DTLZ4-25D epoch 1 done, mean reward/FE = -0.9466, init HV = 8.689488, final HV = 8.818523
+DTLZ5-15D epoch 1 done, mean reward/FE = 0.3103, init HV = 14.355514, final HV = 15.307470
+DTLZ5-20D epoch 1 done, mean reward/FE = -0.5353, init HV = 12.217215, final HV = 12.467931
+DTLZ5-25D epoch 1 done, mean reward/FE = -0.5089, init HV = 9.203856, final HV = 9.632729
+DTLZ6-15D epoch 1 done, mean reward/FE = -0.2837, init HV = 3551.017699, final HV = 3565.844939
+DTLZ6-20D epoch 1 done, mean reward/FE = -0.1006, init HV = 1828.369983, final HV = 1882.679520
+DTLZ6-25D epoch 1 done, mean reward/FE = -0.3828, init HV = 355.189412, final HV = 380.875758
+DTLZ7-15D epoch 1 done, mean reward/FE = -0.0060, init HV = 7.652651, final HV = 12.346276
+DTLZ7-20D epoch 1 done, mean reward/FE = -0.4064, init HV = 6.864260, final HV = 7.881166
+DTLZ7-25D epoch 1 done, mean reward/FE = -0.3918, init HV = 6.240771, final HV = 9.928028
+ZDT1-15D epoch 1 done, mean reward/FE = -0.3773, init HV = 3.155852, final HV = 3.758536
+ZDT1-20D epoch 1 done, mean reward/FE = 0.9927, init HV = 3.000952, final HV = 4.843743
+ZDT1-25D epoch 1 done, mean reward/FE = -0.1637, init HV = 2.725980, final HV = 3.987019
+ZDT2-15D epoch 1 done, mean reward/FE = -0.5912, init HV = 2.787749, final HV = 3.157977
+ZDT2-20D epoch 1 done, mean reward/FE = -0.7830, init HV = 2.721533, final HV = 2.950836
+ZDT2-25D epoch 1 done, mean reward/FE = -0.6499, init HV = 2.467148, final HV = 2.758436
+ZDT3-15D epoch 1 done, mean reward/FE = -0.6415, init HV = 3.195001, final HV = 3.200813
+ZDT3-20D epoch 1 done, mean reward/FE = -0.2922, init HV = 2.900904, final HV = 3.207755
+ZDT3-25D epoch 1 done, mean reward/FE = -0.2233, init HV = 3.072374, final HV = 3.950866
+[Epoch 0001] set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | interact_time_sec=1593.444 | updates=80 | update_time_sec=1277.979 | eps=0.300 | replay=960 | td_loss=0.493028 | grad_norm=0.403230 | q_mean=-0.5272 | q_std=0.1955 | target_mean=-0.2702 | td_error_mean=-0.2570 | td_error_std=1.1987 | shape_group=2 | group_sizes={2: 23.45, 3: 40.55} | batch_r=-0.3379 | ep_return_per_fe=-0.3082
+epoch 1 done | mean reward/FE = -0.3082 | set = 1 | heldout = DTLZ3 | surrogate = tabpfn | ensemble_model = 4 | sur_steps = 20 | workers = 24 | replay = 960 | reward_scheme = 1 | policy = epsilon_greedy | interact_time_sec = 1593.444 | updates = 80 | update_time_sec = 1277.979 | td_loss = 0.493028 | grad_norm = 0.403230 | q_mean = -0.5272 | q_std = 0.1955 | target_mean = -0.2702 | td_error_mean = -0.2570 | td_error_std = 1.1987 | shape_group = 2 | group_sizes = {2: 23.45, 3: 40.55}
+new best mean reward at epoch 1: -0.3082
+[Epoch 0002] start | set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | eps=0.275
+[Epoch 0002] interact done | workers=24 | episodes=24 | interact_time_sec=1600.513
+DTLZ2-15D epoch 2 done, mean reward/FE = 1.0894, init HV = 18.835196, final HV = 19.753527
+DTLZ2-20D epoch 2 done, mean reward/FE = -0.0384, init HV = 16.124442, final HV = 16.792255
+DTLZ2-25D epoch 2 done, mean reward/FE = 0.4629, init HV = 12.651461, final HV = 13.610426
+DTLZ4-15D epoch 2 done, mean reward/FE = -0.8938, init HV = 11.655567, final HV = 11.883851
+DTLZ4-20D epoch 2 done, mean reward/FE = 0.2457, init HV = 10.612898, final HV = 13.099104
+DTLZ4-25D epoch 2 done, mean reward/FE = -0.7322, init HV = 7.487840, final HV = 7.715998
+DTLZ5-15D epoch 2 done, mean reward/FE = 1.0674, init HV = 14.756127, final HV = 15.811472
+DTLZ5-20D epoch 2 done, mean reward/FE = 0.3266, init HV = 12.314787, final HV = 13.199673
+DTLZ5-25D epoch 2 done, mean reward/FE = 0.7489, init HV = 9.608999, final HV = 10.821954
+DTLZ6-15D epoch 2 done, mean reward/FE = 1.6865, init HV = 3522.086604, final HV = 3702.317458
+DTLZ6-20D epoch 2 done, mean reward/FE = 1.6181, init HV = 1819.779059, final HV = 2010.975230
+DTLZ6-25D epoch 2 done, mean reward/FE = 0.0856, init HV = 366.487238, final HV = 426.144462
+DTLZ7-15D epoch 2 done, mean reward/FE = 1.2782, init HV = 8.127928, final HV = 14.608524
+DTLZ7-20D epoch 2 done, mean reward/FE = 0.7856, init HV = 6.344427, final HV = 12.768438
+DTLZ7-25D epoch 2 done, mean reward/FE = 0.4106, init HV = 7.347067, final HV = 11.664932
+ZDT1-15D epoch 2 done, mean reward/FE = 0.8383, init HV = 2.934300, final HV = 4.856896
+ZDT1-20D epoch 2 done, mean reward/FE = 0.1484, init HV = 2.814245, final HV = 4.328805
+ZDT1-25D epoch 2 done, mean reward/FE = 0.3987, init HV = 3.009494, final HV = 4.457523
+ZDT2-15D epoch 2 done, mean reward/FE = 0.7400, init HV = 2.533445, final HV = 5.030113
+ZDT2-20D epoch 2 done, mean reward/FE = -0.0809, init HV = 2.841902, final HV = 3.198486
+ZDT2-25D epoch 2 done, mean reward/FE = 0.2210, init HV = 2.822593, final HV = 3.498439
+ZDT3-15D epoch 2 done, mean reward/FE = 0.4268, init HV = 3.082380, final HV = 4.722734
+ZDT3-20D epoch 2 done, mean reward/FE = 0.2146, init HV = 3.005563, final HV = 4.570722
+ZDT3-25D epoch 2 done, mean reward/FE = 0.1485, init HV = 2.959771, final HV = 3.868932
+[Epoch 0002] set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | interact_time_sec=1600.513 | updates=80 | update_time_sec=1239.121 | eps=0.275 | replay=960 | td_loss=0.880512 | grad_norm=1.252038 | q_mean=0.6391 | q_std=0.5205 | target_mean=0.8837 | td_error_mean=-0.2446 | td_error_std=1.4733 | shape_group=2 | group_sizes={2: 23.975, 3: 40.025} | batch_r=0.4909 | ep_return_per_fe=0.4665
+epoch 2 done | mean reward/FE = 0.4665 | set = 1 | heldout = DTLZ3 | surrogate = tabpfn | ensemble_model = 4 | sur_steps = 20 | workers = 24 | replay = 960 | reward_scheme = 1 | policy = epsilon_greedy | interact_time_sec = 1600.513 | updates = 80 | update_time_sec = 1239.121 | td_loss = 0.880512 | grad_norm = 1.252038 | q_mean = 0.6391 | q_std = 0.5205 | target_mean = 0.8837 | td_error_mean = -0.2446 | td_error_std = 1.4733 | shape_group = 2 | group_sizes = {2: 23.975, 3: 40.025}
+new best mean reward at epoch 2: 0.4665
+[Epoch 0003] start | set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | eps=0.250
+[Epoch 0003] interact done | workers=24 | episodes=24 | interact_time_sec=1601.911
+DTLZ2-15D epoch 3 done, mean reward/FE = 1.4279, init HV = 18.559881, final HV = 20.524479
+DTLZ2-20D epoch 3 done, mean reward/FE = 1.4189, init HV = 16.034880, final HV = 17.995312
+DTLZ2-25D epoch 3 done, mean reward/FE = 1.1791, init HV = 12.649567, final HV = 15.203270
+DTLZ4-15D epoch 3 done, mean reward/FE = 0.2449, init HV = 13.325637, final HV = 15.186009
+DTLZ4-20D epoch 3 done, mean reward/FE = 1.4328, init HV = 11.076416, final HV = 14.499761
+DTLZ4-25D epoch 3 done, mean reward/FE = 0.0003, init HV = 8.120384, final HV = 10.927479
+DTLZ5-15D epoch 3 done, mean reward/FE = 0.6301, init HV = 14.480000, final HV = 15.464081
+DTLZ5-20D epoch 3 done, mean reward/FE = 1.0525, init HV = 12.156951, final HV = 13.229450
+DTLZ5-25D epoch 3 done, mean reward/FE = 0.5333, init HV = 8.818017, final HV = 9.682104
+DTLZ6-15D epoch 3 done, mean reward/FE = 1.3933, init HV = 3470.538182, final HV = 3632.818397
+DTLZ6-20D epoch 3 done, mean reward/FE = 1.5480, init HV = 1850.808248, final HV = 2059.429207
+DTLZ6-25D epoch 3 done, mean reward/FE = 0.1776, init HV = 357.742681, final HV = 440.665405
+DTLZ7-15D epoch 3 done, mean reward/FE = 0.3351, init HV = 7.895367, final HV = 14.563452
+DTLZ7-20D epoch 3 done, mean reward/FE = 0.8922, init HV = 6.861500, final HV = 12.913600
+DTLZ7-25D epoch 3 done, mean reward/FE = 0.8964, init HV = 6.129492, final HV = 12.304358
+ZDT1-15D epoch 3 done, mean reward/FE = 0.2642, init HV = 2.867661, final HV = 4.665095
+ZDT1-20D epoch 3 done, mean reward/FE = 0.3539, init HV = 2.867020, final HV = 4.560808
+ZDT1-25D epoch 3 done, mean reward/FE = 0.6699, init HV = 2.691720, final HV = 4.529713
+ZDT2-15D epoch 3 done, mean reward/FE = -0.7916, init HV = 2.954266, final HV = 3.065838
+ZDT2-20D epoch 3 done, mean reward/FE = -0.4519, init HV = 2.413140, final HV = 2.703059
+ZDT2-25D epoch 3 done, mean reward/FE = -0.1484, init HV = 2.311045, final HV = 3.154359
+ZDT3-15D epoch 3 done, mean reward/FE = 0.3628, init HV = 3.166229, final HV = 4.731617
+ZDT3-20D epoch 3 done, mean reward/FE = 0.9501, init HV = 2.980819, final HV = 5.229637
+ZDT3-25D epoch 3 done, mean reward/FE = 0.7339, init HV = 2.927463, final HV = 4.586659
+[Epoch 0003] set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | interact_time_sec=1601.911 | updates=80 | update_time_sec=1278.682 | eps=0.250 | replay=960 | td_loss=0.899984 | grad_norm=1.837756 | q_mean=0.8736 | q_std=0.7243 | target_mean=0.9468 | td_error_mean=-0.0732 | td_error_std=1.7005 | shape_group=2 | group_sizes={2: 23.1875, 3: 40.8125} | batch_r=0.6324 | ep_return_per_fe=0.6294
+epoch 3 done | mean reward/FE = 0.6294 | set = 1 | heldout = DTLZ3 | surrogate = tabpfn | ensemble_model = 4 | sur_steps = 20 | workers = 24 | replay = 960 | reward_scheme = 1 | policy = epsilon_greedy | interact_time_sec = 1601.911 | updates = 80 | update_time_sec = 1278.682 | td_loss = 0.899984 | grad_norm = 1.837756 | q_mean = 0.8736 | q_std = 0.7243 | target_mean = 0.9468 | td_error_mean = -0.0732 | td_error_std = 1.7005 | shape_group = 2 | group_sizes = {2: 23.1875, 3: 40.8125}
+new best mean reward at epoch 3: 0.6294
+[Epoch 0004] start | set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | eps=0.225
+[Epoch 0004] interact done | workers=24 | episodes=24 | interact_time_sec=8537.154
+DTLZ2-15D epoch 4 done, mean reward/FE = 0.7757, init HV = 18.650436, final HV = 19.135742
+DTLZ2-20D epoch 4 done, mean reward/FE = 0.6916, init HV = 16.513312, final HV = 17.974405
+DTLZ2-25D epoch 4 done, mean reward/FE = 0.9339, init HV = 11.821975, final HV = 14.364166
+DTLZ4-15D epoch 4 done, mean reward/FE = 0.2431, init HV = 12.586636, final HV = 14.781643
+DTLZ4-20D epoch 4 done, mean reward/FE = 0.4854, init HV = 10.208103, final HV = 13.675398
+DTLZ4-25D epoch 4 done, mean reward/FE = -0.4745, init HV = 8.399489, final HV = 9.947651
+DTLZ5-15D epoch 4 done, mean reward/FE = 0.7177, init HV = 14.563731, final HV = 15.202782
+DTLZ5-20D epoch 4 done, mean reward/FE = 1.0137, init HV = 11.652896, final HV = 13.044635
+DTLZ5-25D epoch 4 done, mean reward/FE = 0.9167, init HV = 9.540033, final HV = 11.420683
+DTLZ6-15D epoch 4 done, mean reward/FE = 1.5166, init HV = 3526.934708, final HV = 3584.054078
+DTLZ6-20D epoch 4 done, mean reward/FE = 1.5748, init HV = 1889.025833, final HV = 2057.811174
+DTLZ6-25D epoch 4 done, mean reward/FE = 0.5532, init HV = 326.679366, final HV = 428.937727
+DTLZ7-15D epoch 4 done, mean reward/FE = -0.5338, init HV = 9.029311, final HV = 9.545986
+DTLZ7-20D epoch 4 done, mean reward/FE = 0.4122, init HV = 6.600776, final HV = 13.471730
+DTLZ7-25D epoch 4 done, mean reward/FE = 0.4880, init HV = 6.760137, final HV = 13.171059
+ZDT1-15D epoch 4 done, mean reward/FE = 1.1019, init HV = 3.165778, final HV = 5.183583
+ZDT1-20D epoch 4 done, mean reward/FE = 0.7805, init HV = 2.850509, final HV = 4.800367
+ZDT1-25D epoch 4 done, mean reward/FE = 0.6400, init HV = 2.596196, final HV = 4.442085
+ZDT2-15D epoch 4 done, mean reward/FE = -0.7562, init HV = 2.741752, final HV = 3.144437
+ZDT2-20D epoch 4 done, mean reward/FE = 0.1604, init HV = 2.714925, final HV = 4.118467
+ZDT2-25D epoch 4 done, mean reward/FE = -0.1747, init HV = 2.457649, final HV = 3.999656
+ZDT3-15D epoch 4 done, mean reward/FE = 0.8927, init HV = 3.055777, final HV = 5.016328
+ZDT3-20D epoch 4 done, mean reward/FE = 0.5051, init HV = 2.941204, final HV = 5.058591
+ZDT3-25D epoch 4 done, mean reward/FE = 0.0679, init HV = 3.157130, final HV = 3.963232
+[Epoch 0004] set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | interact_time_sec=8537.154 | updates=80 | update_time_sec=1246.864 | eps=0.225 | replay=960 | td_loss=0.757556 | grad_norm=1.791802 | q_mean=0.7336 | q_std=0.8626 | target_mean=0.7250 | td_error_mean=0.0086 | td_error_std=1.4136 | shape_group=2 | group_sizes={2: 23.7375, 3: 40.2625} | batch_r=0.4976 | ep_return_per_fe=0.5222
+epoch 4 done | mean reward/FE = 0.5222 | set = 1 | heldout = DTLZ3 | surrogate = tabpfn | ensemble_model = 4 | sur_steps = 20 | workers = 24 | replay = 960 | reward_scheme = 1 | policy = epsilon_greedy | interact_time_sec = 8537.154 | updates = 80 | update_time_sec = 1246.864 | td_loss = 0.757556 | grad_norm = 1.791802 | q_mean = 0.7336 | q_std = 0.8626 | target_mean = 0.7250 | td_error_mean = 0.0086 | td_error_std = 1.4136 | shape_group = 2 | group_sizes = {2: 23.7375, 3: 40.2625}
+[Epoch 0005] start | set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | eps=0.200
+[Epoch 0005] interact done | workers=24 | episodes=24 | interact_time_sec=1599.559
+DTLZ2-15D epoch 5 done, mean reward/FE = 0.9797, init HV = 18.825036, final HV = 19.484269
+DTLZ2-20D epoch 5 done, mean reward/FE = 1.1174, init HV = 15.313323, final HV = 16.555331
+DTLZ2-25D epoch 5 done, mean reward/FE = 1.1840, init HV = 11.879464, final HV = 13.938696
+DTLZ4-15D epoch 5 done, mean reward/FE = 0.9668, init HV = 13.752477, final HV = 16.954567
+DTLZ4-20D epoch 5 done, mean reward/FE = 0.2611, init HV = 10.091416, final HV = 12.117250
+DTLZ4-25D epoch 5 done, mean reward/FE = 0.1257, init HV = 8.747734, final HV = 11.532573
+DTLZ5-15D epoch 5 done, mean reward/FE = 0.7674, init HV = 15.063403, final HV = 15.799039
+DTLZ5-20D epoch 5 done, mean reward/FE = 0.7811, init HV = 12.060951, final HV = 13.779952
+DTLZ5-25D epoch 5 done, mean reward/FE = 0.9544, init HV = 9.442377, final HV = 12.206398
+DTLZ6-15D epoch 5 done, mean reward/FE = 1.5660, init HV = 3461.075294, final HV = 3555.583257
+DTLZ6-20D epoch 5 done, mean reward/FE = 1.5406, init HV = 1810.646068, final HV = 1958.414215
+DTLZ6-25D epoch 5 done, mean reward/FE = 0.6070, init HV = 322.812331, final HV = 465.197693
+DTLZ7-15D epoch 5 done, mean reward/FE = 0.0782, init HV = 6.922502, final HV = 13.772366
+DTLZ7-20D epoch 5 done, mean reward/FE = 0.7094, init HV = 7.452179, final HV = 13.706541
+DTLZ7-25D epoch 5 done, mean reward/FE = 0.8614, init HV = 5.570417, final HV = 12.164981
+ZDT1-15D epoch 5 done, mean reward/FE = -0.1035, init HV = 2.728927, final HV = 4.284633
+ZDT1-20D epoch 5 done, mean reward/FE = 0.4448, init HV = 2.807623, final HV = 4.712507
+ZDT1-25D epoch 5 done, mean reward/FE = 0.6296, init HV = 2.747795, final HV = 4.626356
+ZDT2-15D epoch 5 done, mean reward/FE = 0.5563, init HV = 2.599315, final HV = 5.194528
+ZDT2-20D epoch 5 done, mean reward/FE = 0.2894, init HV = 2.550882, final HV = 4.473480
+ZDT2-25D epoch 5 done, mean reward/FE = -0.1337, init HV = 2.440641, final HV = 3.093579
+ZDT3-15D epoch 5 done, mean reward/FE = 0.3420, init HV = 3.157903, final HV = 4.588738
+ZDT3-20D epoch 5 done, mean reward/FE = 1.2502, init HV = 2.904107, final HV = 5.229510
+ZDT3-25D epoch 5 done, mean reward/FE = 0.6555, init HV = 2.722944, final HV = 4.813993
+[Epoch 0005] set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | interact_time_sec=1599.559 | updates=80 | update_time_sec=1231.994 | eps=0.200 | replay=960 | td_loss=0.810855 | grad_norm=2.121746 | q_mean=0.8034 | q_std=0.8357 | target_mean=0.8127 | td_error_mean=-0.0093 | td_error_std=1.5249 | shape_group=2 | group_sizes={2: 24.4875, 3: 39.5125} | batch_r=0.6911 | ep_return_per_fe=0.6846
+epoch 5 done | mean reward/FE = 0.6846 | set = 1 | heldout = DTLZ3 | surrogate = tabpfn | ensemble_model = 4 | sur_steps = 20 | workers = 24 | replay = 960 | reward_scheme = 1 | policy = epsilon_greedy | interact_time_sec = 1599.559 | updates = 80 | update_time_sec = 1231.994 | td_loss = 0.810855 | grad_norm = 2.121746 | q_mean = 0.8034 | q_std = 0.8357 | target_mean = 0.8127 | td_error_mean = -0.0093 | td_error_std = 1.5249 | shape_group = 2 | group_sizes = {2: 24.4875, 3: 39.5125}
+new best mean reward at epoch 5: 0.6846
+[Epoch 0006] start | set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | eps=0.175
+[Epoch 0006] interact done | workers=24 | episodes=24 | interact_time_sec=1625.068
+DTLZ2-15D epoch 6 done, mean reward/FE = 1.2091, init HV = 18.281763, final HV = 19.150677
+DTLZ2-20D epoch 6 done, mean reward/FE = 0.8257, init HV = 15.784730, final HV = 18.141059
+DTLZ2-25D epoch 6 done, mean reward/FE = 1.2142, init HV = 11.985244, final HV = 13.642477
+DTLZ4-15D epoch 6 done, mean reward/FE = -0.9244, init HV = 11.449463, final HV = 11.507855
+DTLZ4-20D epoch 6 done, mean reward/FE = -0.8298, init HV = 9.381350, final HV = 9.448292
+DTLZ4-25D epoch 6 done, mean reward/FE = -0.8314, init HV = 7.865270, final HV = 7.930217
+DTLZ5-15D epoch 6 done, mean reward/FE = 0.9068, init HV = 14.690620, final HV = 15.506855
+DTLZ5-20D epoch 6 done, mean reward/FE = 1.7656, init HV = 12.424112, final HV = 14.683950
+DTLZ5-25D epoch 6 done, mean reward/FE = 1.1276, init HV = 9.030405, final HV = 10.676797
+DTLZ6-15D epoch 6 done, mean reward/FE = 1.6502, init HV = 3540.657347, final HV = 3650.227010
+DTLZ6-20D epoch 6 done, mean reward/FE = 1.4371, init HV = 1847.745466, final HV = 1992.764489
+DTLZ6-25D epoch 6 done, mean reward/FE = 0.8003, init HV = 348.576454, final HV = 503.205858
+DTLZ7-15D epoch 6 done, mean reward/FE = 0.6659, init HV = 6.838408, final HV = 14.654319
+DTLZ7-20D epoch 6 done, mean reward/FE = 0.8784, init HV = 6.202920, final HV = 13.347632
+DTLZ7-25D epoch 6 done, mean reward/FE = 0.7398, init HV = 6.470433, final HV = 13.544294
+ZDT1-15D epoch 6 done, mean reward/FE = 0.6168, init HV = 2.919132, final HV = 4.765250
+ZDT1-20D epoch 6 done, mean reward/FE = 0.4922, init HV = 2.801398, final HV = 4.489735
+ZDT1-25D epoch 6 done, mean reward/FE = -0.0586, init HV = 2.802885, final HV = 4.048718
+ZDT2-15D epoch 6 done, mean reward/FE = -0.7193, init HV = 3.182235, final HV = 4.097864
+ZDT2-20D epoch 6 done, mean reward/FE = -0.1693, init HV = 2.804568, final HV = 4.163331
+ZDT2-25D epoch 6 done, mean reward/FE = -0.0159, init HV = 2.370927, final HV = 3.992649
+ZDT3-15D epoch 6 done, mean reward/FE = 0.1667, init HV = 3.146350, final HV = 4.395728
+ZDT3-20D epoch 6 done, mean reward/FE = 0.1826, init HV = 3.079579, final HV = 5.070278
+ZDT3-25D epoch 6 done, mean reward/FE = 0.4345, init HV = 2.822312, final HV = 4.135125
+[Epoch 0006] set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | interact_time_sec=1625.068 | updates=80 | update_time_sec=1266.229 | eps=0.175 | replay=960 | td_loss=0.590023 | grad_norm=2.162719 | q_mean=0.6615 | q_std=0.9945 | target_mean=0.6089 | td_error_mean=0.0526 | td_error_std=1.2430 | shape_group=2 | group_sizes={2: 23.5125, 3: 40.4875} | batch_r=0.4618 | ep_return_per_fe=0.4819
+epoch 6 done | mean reward/FE = 0.4819 | set = 1 | heldout = DTLZ3 | surrogate = tabpfn | ensemble_model = 4 | sur_steps = 20 | workers = 24 | replay = 960 | reward_scheme = 1 | policy = epsilon_greedy | interact_time_sec = 1625.068 | updates = 80 | update_time_sec = 1266.229 | td_loss = 0.590023 | grad_norm = 2.162719 | q_mean = 0.6615 | q_std = 0.9945 | target_mean = 0.6089 | td_error_mean = 0.0526 | td_error_std = 1.2430 | shape_group = 2 | group_sizes = {2: 23.5125, 3: 40.4875}
+[Epoch 0007] start | set=1 | heldout=DTLZ3 | envs_active=24/24 | surrogate=tabpfn | ensemble_model=4 | sur_steps=20 | eps=0.150
