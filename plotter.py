@@ -39,6 +39,25 @@ def parse_training_log(log_path):
     }
 
 
+def limit_log_info_epochs(log_info, max_epochs):
+    if max_epochs is None:
+        return log_info
+
+    limit = max(0, int(max_epochs))
+    if limit == 0:
+        return {
+            **log_info,
+            "epochs": [],
+            "rewards": [],
+        }
+
+    return {
+        **log_info,
+        "epochs": list(log_info["epochs"][:limit]),
+        "rewards": list(log_info["rewards"][:limit]),
+    }
+
+
 def moving_average(values, window):
     if len(values) < window:
         return np.asarray(values, dtype=np.float64)
@@ -69,7 +88,8 @@ def plot_single_log(log_info, window):
         epochs,
         rewards,
         label=build_series_label(log_info, "raw"),
-        alpha=0.4,
+        alpha=0.7,
+        linewidth=1.8,
     )
 
     if len(rewards) >= window:
@@ -103,13 +123,15 @@ def plot_compare_logs(log_info1, log_info2, window):
         log_info1["epochs"],
         log_info1["rewards"],
         label=build_series_label(log_info1, "raw"),
-        alpha=0.28,
+        alpha=0.6,
+        linewidth=1.6,
     )
     plt.plot(
         log_info2["epochs"],
         log_info2["rewards"],
         label=build_series_label(log_info2, "raw"),
-        alpha=0.28,
+        alpha=0.6,
+        linewidth=1.6,
     )
 
     if len(log_info1["rewards"]) >= window:
@@ -168,6 +190,12 @@ def main():
         default=5,
         help="Moving average window",
     )
+    parser.add_argument(
+        "--max_epochs",
+        type=int,
+        default=None,
+        help="Limit the number of epochs to plot from the start of the log",
+    )
 
     args = parser.parse_args()
 
@@ -177,12 +205,12 @@ def main():
     if using_single and using_compare:
         raise ValueError("Use either --log_path or (--log_path1 and --log_path2), not both.")
     if using_single:
-        log_info = parse_training_log(args.log_path)
+        log_info = limit_log_info_epochs(parse_training_log(args.log_path), args.max_epochs)
         plot_single_log(log_info, int(args.window))
         return
     if bool(args.log_path1) and bool(args.log_path2):
-        log_info1 = parse_training_log(args.log_path1)
-        log_info2 = parse_training_log(args.log_path2)
+        log_info1 = limit_log_info_epochs(parse_training_log(args.log_path1), args.max_epochs)
+        log_info2 = limit_log_info_epochs(parse_training_log(args.log_path2), args.max_epochs)
         plot_compare_logs(log_info1, log_info2, int(args.window))
         return
 
