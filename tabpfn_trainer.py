@@ -48,6 +48,7 @@ def parse_args():
     parser.add_argument("--epoch", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=1, choices=[1, 2, 3])
+    parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
@@ -320,6 +321,7 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
             selected_y=chosen_y,
             ref_point=self.ref_point,
             reward_scheme_id=int(self.cfg["reward_scheme"]),
+            reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
         )
 
         self.t += 1
@@ -709,6 +711,7 @@ def train_disc_ddqn_tabpfn(
     epoch=None,
     gamma=None,
     reward_scheme=1,
+    reward_lambda=10.0,
     surrogate_model="tabpfn",
     ensemble_model=8,
     training_set=1,
@@ -727,6 +730,7 @@ def train_disc_ddqn_tabpfn(
     if gamma is not None:
         cfg.gamma = float(gamma)
     cfg.reward_scheme = int(reward_scheme)
+    cfg.reward_lambda = float(reward_lambda)
     cfg.surrogate_model = str(surrogate_model).lower()
     cfg.ensemble_model = int(ensemble_model)
     cfg.training_set = int(training_set)
@@ -810,6 +814,7 @@ def train_disc_ddqn_tabpfn(
         f"envs={len(env_specs)} | "
         f"workers={actual_num_workers} | "
         f"reward_scheme={cfg.reward_scheme} | "
+        f"reward_lambda={cfg.reward_lambda:.4f} | "
         f"policy={cfg.policy_mode} | "
         f"surrogate={cfg.surrogate_model} | "
         f"ensemble_model={cfg.ensemble_model} | "
@@ -1135,6 +1140,7 @@ if __name__ == "__main__":
         epoch=args.epoch,
         gamma=args.gamma,
         reward_scheme=int(args.reward_scheme),
+        reward_lambda=float(args.reward_lambda),
         surrogate_model=str(args.surrogate_model),
         ensemble_model=int(args.ensemble_model),
         training_set=int(args.training_set),

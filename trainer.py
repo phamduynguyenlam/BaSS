@@ -60,6 +60,7 @@ class TrainConfig:
     kan_hidden_width: int = 10
     kan_grid: int = 5
     reward_scheme: int = 1
+    reward_lambda: float = 10.0
     policy_mode: str = "epsilon_greedy"
     training_set: int = 1
     heldout_problem: str = "ZDT1"
@@ -123,6 +124,7 @@ def parse_args():
     parser.add_argument("--epoch", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=1, choices=[1, 2, 3])
+    parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--surrogate_model", type=str, default="kan", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--num_workers", type=int, default=None)
@@ -519,7 +521,7 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
     return weighted_loss, metrics
 
 
-def compute_env_reward(previous_archive_y, selected_y, ref_point, reward_scheme_id):
+def compute_env_reward(previous_archive_y, selected_y, ref_point, reward_scheme_id, reward_lambda=10.0):
     previous_front = pareto_front(np.asarray(previous_archive_y, dtype=np.float32))
     selected_y = np.asarray(selected_y, dtype=np.float32)
 
@@ -529,6 +531,7 @@ def compute_env_reward(previous_archive_y, selected_y, ref_point, reward_scheme_
                 previous_front=previous_front,
                 selected_objectives=selected_y,
                 ref_point=ref_point,
+                reward_lambda=float(reward_lambda),
             )
         )
     if int(reward_scheme_id) == 2:
@@ -537,6 +540,7 @@ def compute_env_reward(previous_archive_y, selected_y, ref_point, reward_scheme_
                 previous_front=previous_front,
                 selected_objectives=selected_y,
                 ref_point=ref_point,
+                reward_lambda=float(reward_lambda),
             )
         )
     if int(reward_scheme_id) == 3:
@@ -694,6 +698,7 @@ class DiscSAEAEnv:
             selected_y=chosen_y,
             ref_point=self.ref_point,
             reward_scheme_id=int(self.cfg["reward_scheme"]),
+            reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
         )
 
         self.t += 1
@@ -848,6 +853,7 @@ def train_disc_ddqn_ray(
     epoch=None,
     gamma=None,
     reward_scheme=1,
+    reward_lambda=10.0,
     surrogate_model="kan",
     training_set=1,
     num_workers=None,
@@ -865,6 +871,7 @@ def train_disc_ddqn_ray(
     if gamma is not None:
         cfg.gamma = float(gamma)
     cfg.reward_scheme = int(reward_scheme)
+    cfg.reward_lambda = float(reward_lambda)
     cfg.surrogate_model = str(surrogate_model).lower()
     cfg.training_set = int(training_set)
     cfg.heldout_problem = str(problem_name).upper()
@@ -940,6 +947,7 @@ def train_disc_ddqn_ray(
         f"envs={len(env_specs)} | "
         f"workers={actual_num_workers} | "
         f"reward_scheme={cfg.reward_scheme} | "
+        f"reward_lambda={cfg.reward_lambda:.4f} | "
         f"agent={cfg.agent_name} | "
         f"policy={cfg.policy_mode} | "
         f"surrogate={cfg.surrogate_model} | "
@@ -1224,6 +1232,7 @@ if __name__ == "__main__":
         epoch=args.epoch,
         gamma=args.gamma,
         reward_scheme=int(args.reward_scheme),
+        reward_lambda=float(args.reward_lambda),
         surrogate_model=str(args.surrogate_model),
         training_set=int(args.training_set),
         num_workers=args.num_workers,

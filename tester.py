@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent_pth", type=str, default=None)
     parser.add_argument("--random_model", action="store_true")
     parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--kan_steps", type=int, default=25)
     parser.add_argument("--kan_hidden_width", type=int, default=10)
     parser.add_argument("--kan_grid", type=int, default=5)
@@ -337,6 +338,7 @@ def run_policy_rollout(
                 previous_front=previous_front,
                 selected_objectives=selected_true,
                 ref_point=ref_point,
+                reward_lambda=float(args.reward_lambda),
             )
         )
 
@@ -396,6 +398,7 @@ def run_policy_rollout(
         "init_fe": int(args.init_fe),
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
+        "reward_lambda": float(args.reward_lambda),
         "agent_name": args.agent_name,
         "policy_name": policy_name.lower(),
         "agent_pth": args.agent_pth,

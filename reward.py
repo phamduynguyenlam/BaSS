@@ -92,6 +92,7 @@ def reward_scheme_1(
     previous_front: np.ndarray,
     selected_objectives: np.ndarray,
     ref_point: np.ndarray,
+    reward_lambda: float = 10.0,
 ) -> float:
     """Distance-to-front reward, scaled and offset; returns 0 if HV doesn't improve."""
     previous_front = pareto_front(np.asarray(previous_front, dtype=np.float32))
@@ -110,7 +111,7 @@ def reward_scheme_1(
         d_i = float(distances[nearest_idx])
         d_ref_i = float(np.abs(previous_front[nearest_idx] - origin).sum())
         reward += d_i / max(d_ref_i, 1e-12)
-    return float(max(1e-6, 1.0 + 10.0 * reward))
+    return float(max(1e-6, 1.0 + float(reward_lambda) * reward))
 
 
 def reward_scheme_2(
@@ -118,6 +119,7 @@ def reward_scheme_2(
     previous_front: np.ndarray,
     selected_objectives: np.ndarray,
     ref_point: np.ndarray,
+    reward_lambda: float = 10.0,
 ) -> float:
     """Distance-to-front reward; returns 0 if HV doesn't improve."""
     previous_front = pareto_front(np.asarray(previous_front, dtype=np.float32))
@@ -136,7 +138,7 @@ def reward_scheme_2(
         d_i = float(distances[nearest_idx])
         d_ref_i = float(np.abs(previous_front[nearest_idx] - origin).sum())
         reward += d_i / max(d_ref_i, 1e-12)
-    return float(max(1e-6, 10.0 * reward))
+    return float(max(1e-6, float(reward_lambda) * reward))
 
 
 def reward_scheme_3(
