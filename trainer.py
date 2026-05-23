@@ -3,6 +3,7 @@ import argparse
 import copy
 import random
 import time
+import re
 from datetime import datetime
 from dataclasses import dataclass
 from collections import deque
@@ -70,6 +71,7 @@ class TrainConfig:
     surrogate_device: str = "cpu"
     ensemble_model: int = 8
     agent_name: str = "disc"
+    agent_pth: str | None = None
 
 
 class ReplayBuffer:
@@ -133,8 +135,30 @@ def parse_args():
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--rollout_device", type=str, default="cpu")
     parser.add_argument("--surrogate_device", type=str, default="cpu")
+    parser.add_argument("--agent_pth", type=str, default=None)
     parser.add_argument("--ray", action="store_true")
     return parser.parse_args()
+
+
+def _parse_resume_metadata(agent_pth: str, checkpoint_obj) -> tuple[int, bool]:
+    basename = os.path.basename(str(agent_pth))
+    lower_name = basename.lower()
+    is_best_reward = "best_reward" in lower_name
+
+    resume_epoch = 0
+    match = re.search(r"epoch_(\d+)", lower_name)
+    if match is not None:
+        resume_epoch = max(resume_epoch, int(match.group(1)))
+
+    if isinstance(checkpoint_obj, dict):
+        ckpt_epoch = checkpoint_obj.get("epoch", None)
+        if ckpt_epoch is not None:
+            try:
+                resume_epoch = max(resume_epoch, int(ckpt_epoch))
+            except Exception:
+                pass
+
+    return int(resume_epoch), bool(is_best_reward)
 
 
 TRAIN_PROBLEM_POOL = [
@@ -812,9 +836,10 @@ def save_training_checkpoint(
 ):
     os.makedirs(cfg.weight_dir, exist_ok=True)
     rs_tag = f"rs{int(cfg.reward_scheme)}"
+    hidden_tag = f"h{int(cfg.hidden_dim)}"
     problem_tag = str(problem_name).lower()
     agent_tag = str(getattr(cfg, "agent_name", "disc")).lower()
-    file_prefix = f"{agent_tag}_problem_{problem_tag}_{rs_tag}"
+    file_prefix = f"{agent_tag}_problem_{problem_tag}_{rs_tag}_{hidden_tag}"
 
     if mean_reward > best_reward:
         best_path = os.path.join(cfg.weight_dir, f"{file_prefix}_best_reward.pth")
@@ -864,6 +889,7 @@ def train_disc_ddqn_ray(
     surrogate_device="cpu",
     use_ray=False,
     agent_name="disc",
+    agent_pth=None,
 ):
     cfg = TrainConfig()
     if epoch is not None:
@@ -883,6 +909,7 @@ def train_disc_ddqn_ray(
     cfg.rollout_device = str(rollout_device)
     cfg.surrogate_device = str(surrogate_device)
     cfg.agent_name = str(agent_name).lower()
+    cfg.agent_pth = None if agent_pth is None else str(agent_pth)
     if num_workers is not None:
         cfg.num_workers = int(num_workers)
     if cfg.surrogate_model not in {"gp", "kan", "tabpfn"}:
@@ -939,6 +966,19 @@ def train_disc_ddqn_ray(
 
     optimizer = optim.Adam(agent.parameters(), lr=cfg.lr)
     best_reward = -float("inf")
+    resume_epoch = 0
+    resume_is_best_reward = False
+    if cfg.agent_pth:
+        checkpoint = torch.load(cfg.agent_pth, map_location=cfg.device)
+        state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
+        agent.load_state_dict(state_dict, strict=True)
+        target_agent.load_state_dict(agent.state_dict())
+        resume_epoch, resume_is_best_reward = _parse_resume_metadata(cfg.agent_pth, checkpoint)
+        if isinstance(checkpoint, dict) and "mean_reward" in checkpoint:
+            try:
+                best_reward = float(checkpoint["mean_reward"])
+            except Exception:
+                pass
 
     log(
         "Training config | "
@@ -963,12 +1003,16 @@ def train_disc_ddqn_ray(
         f"replay_size={cfg.replay_size} | "
         f"gamma={cfg.gamma:.4f} | "
         f"target_update={cfg.target_update_interval} | "
+        f"agent_pth={cfg.agent_pth if cfg.agent_pth else '-'} | "
+        f"resume_epoch={resume_epoch} | "
+        f"resume_best_reward={int(resume_is_best_reward)} | "
         f"log_path={log_path}"
     )
 
-    for it in range(cfg.train_iters):
+    for local_it in range(cfg.train_iters):
+        it = int(resume_epoch) + int(local_it)
         epoch = int(it) + 1
-        epsilon = epsilon_by_iter(it, cfg)
+        epsilon = cfg.epsilon_end if resume_is_best_reward else epsilon_by_iter(it, cfg)
         replay = ReplayBuffer(cfg.replay_size)
 
         log(
@@ -1241,5 +1285,6 @@ if __name__ == "__main__":
         device=args.device,
         rollout_device=str(args.rollout_device),
         surrogate_device=str(args.surrogate_device),
+        agent_pth=(None if args.agent_pth is None else str(args.agent_pth)),
         use_ray=bool(args.ray),
     )
