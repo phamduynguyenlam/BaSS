@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,7 @@ from infill import ExpectedHypervolumeImprovement
 from nsga2_solver import run_surrogate_nsga2
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
-from reward import hypervolume, pareto_front, reward_scheme_1
+from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
 from surrogate.surrogate_model import (
     estimate_uncertainty,
     fit_gp_surrogates,
@@ -24,6 +26,76 @@ from surrogate.surrogate_model import (
     KANSurrogateModel,
     surrogate_model_name,
 )
+
+
+def make_test_logger(log_path: Path):
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fp = log_path.open("w", encoding="utf-8")
+
+    def _log(message: str) -> None:
+        text = str(message)
+        print(text)
+        log_fp.write(text + "\n")
+        log_fp.flush()
+
+    return _log, log_fp
+
+
+def default_test_log_path(args: argparse.Namespace, *, agent_name: str) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    compare_tag = "_compare" if bool(getattr(args, "compare_ehvi", False)) else ""
+    stem = (
+        f"test_{str(agent_name).lower()}_{str(args.problem).lower()}_"
+        f"{str(args.surrogate_model).lower()}_seed{int(args.seed)}{compare_tag}_{timestamp}.txt"
+    )
+    return Path("testing_logs") / stem
+
+
+def resolve_test_reward_scheme(args: argparse.Namespace) -> int:
+    agent_pth = getattr(args, "agent_pth", None)
+    if not agent_pth:
+        return 1
+    match = re.search(r"rs([123])", Path(str(agent_pth)).name.lower())
+    if match is None:
+        return 1
+    return int(match.group(1))
+
+
+def compute_test_reward(
+    *,
+    reward_scheme_id: int,
+    previous_front: np.ndarray,
+    selected_objectives: np.ndarray,
+    ref_point: np.ndarray,
+    reward_lambda: float,
+) -> float:
+    if int(reward_scheme_id) == 1:
+        return float(
+            reward_scheme_1(
+                previous_front=previous_front,
+                selected_objectives=selected_objectives,
+                ref_point=ref_point,
+                reward_lambda=float(reward_lambda),
+            )
+        )
+    if int(reward_scheme_id) == 2:
+        return float(
+            reward_scheme_2(
+                previous_front=previous_front,
+                selected_objectives=selected_objectives,
+                ref_point=ref_point,
+                reward_lambda=float(reward_lambda),
+            )
+        )
+    if int(reward_scheme_id) == 3:
+        return float(
+            reward_scheme_3(
+                previous_front=previous_front,
+                selected_objectives=selected_objectives,
+                ref_point=ref_point,
+            )
+        )
+    raise ValueError(f"Unsupported reward_scheme_id for tester: {reward_scheme_id}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -264,6 +336,8 @@ def run_policy_rollout(
     infill_criterion: ExpectedHypervolumeImprovement | None = None,
     compare_mode: bool = False,
     make_plot: bool = True,
+    logger=print,
+    reward_scheme_id: int = 1,
 ) -> tuple[dict[str, Any], np.ndarray]:
     archive_x = np.asarray(archive_x_init, dtype=np.float32).copy()
     archive_y = np.asarray(archive_y_init, dtype=np.float32).copy()
@@ -274,7 +348,7 @@ def run_policy_rollout(
     step_rewards: list[float] = []
 
     prefix = f"[{policy_name}] " if compare_mode else ""
-    print(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
+    logger(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
 
     surrogate = build_surrogate(args, archive_x, archive_y)
     for step in range(n_evo_steps):
@@ -333,13 +407,12 @@ def run_policy_rollout(
         selected_pred = offspring_pred[selected_idx]
         selected_true = np.asarray(problem.evaluate(selected_x), dtype=np.float32)
         previous_front = pareto_front(np.asarray(archive_y, dtype=np.float32))
-        step_reward = float(
-            reward_scheme_1(
-                previous_front=previous_front,
-                selected_objectives=selected_true,
-                ref_point=ref_point,
-                reward_lambda=float(args.reward_lambda),
-            )
+        step_reward = compute_test_reward(
+            reward_scheme_id=int(reward_scheme_id),
+            previous_front=previous_front,
+            selected_objectives=selected_true,
+            ref_point=ref_point,
+            reward_lambda=float(args.reward_lambda),
         )
 
         archive_x = np.vstack([archive_x, selected_x]).astype(np.float32)
@@ -364,7 +437,7 @@ def run_policy_rollout(
         history.append(record)
         step_rewards.append(step_reward)
 
-        print(
+        logger(
             f"{prefix}iter {record.step} | front = {front_size} | "
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f}"
         )
@@ -399,6 +472,7 @@ def run_policy_rollout(
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
         "reward_lambda": float(args.reward_lambda),
+        "reward_scheme": int(reward_scheme_id),
         "agent_name": args.agent_name,
         "policy_name": policy_name.lower(),
         "agent_pth": args.agent_pth,
@@ -651,40 +725,31 @@ def main(agent_name: str = "disc") -> None:
     args = parse_args()
     args.agent_name = str(agent_name).lower()
     set_seed(int(args.seed))
+    test_log_path = default_test_log_path(args, agent_name=args.agent_name)
+    log, log_fp = make_test_logger(test_log_path)
 
-    problem = make_problem(args.problem, dim=int(args.dim))
-    n_evo_steps = int(args.max_fe) - int(args.init_fe)
+    try:
+        log(f"test_log_path = {str(test_log_path.resolve())}")
+        problem = make_problem(args.problem, dim=int(args.dim))
+        n_evo_steps = int(args.max_fe) - int(args.init_fe)
+        reward_scheme_id = resolve_test_reward_scheme(args)
 
-    archive_x = latin_hypercube_sample(
-        n_samples=int(args.init_fe),
-        dim=int(args.dim),
-        lower=problem.lower,
-        upper=problem.upper,
-        seed=int(args.seed),
-    )
-    archive_y = np.asarray(problem.evaluate(archive_x), dtype=np.float32)
-    n_obj = int(archive_y.shape[1])
-    ref_point = get_reference_point(args.problem, n_obj=n_obj)
-    nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
-    true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
-    print(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
-    disc = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
-    disc_summary, disc_archive_y = run_policy_rollout(
-        args=args,
-        problem=problem,
-        nsga2_problem=nsga2_problem,
-        ref_point=ref_point,
-        true_pareto=true_pareto,
-        archive_x_init=archive_x,
-        archive_y_init=archive_y,
-        policy_name="disc",
-        disc=disc,
-        compare_mode=bool(args.compare_ehvi),
-        make_plot=not bool(args.compare_ehvi),
-    )
-
-    if bool(args.compare_ehvi):
-        ehvi_summary, ehvi_archive_y = run_policy_rollout(
+        archive_x = latin_hypercube_sample(
+            n_samples=int(args.init_fe),
+            dim=int(args.dim),
+            lower=problem.lower,
+            upper=problem.upper,
+            seed=int(args.seed),
+        )
+        archive_y = np.asarray(problem.evaluate(archive_x), dtype=np.float32)
+        n_obj = int(archive_y.shape[1])
+        ref_point = get_reference_point(args.problem, n_obj=n_obj)
+        nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
+        true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
+        log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
+        log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
+        disc = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
+        disc_summary, disc_archive_y = run_policy_rollout(
             args=args,
             problem=problem,
             nsga2_problem=nsga2_problem,
@@ -692,64 +757,88 @@ def main(agent_name: str = "disc") -> None:
             true_pareto=true_pareto,
             archive_x_init=archive_x,
             archive_y_init=archive_y,
-            policy_name="ehvi",
-            infill_criterion=ExpectedHypervolumeImprovement(ref_point=ref_point, n_samples=64),
-            compare_mode=True,
-            make_plot=False,
+            policy_name="disc",
+            disc=disc,
+            compare_mode=bool(args.compare_ehvi),
+            make_plot=not bool(args.compare_ehvi),
+            logger=log,
+            reward_scheme_id=int(reward_scheme_id),
         )
-        compare_plot_path = plot_compare_results(
-            args=args,
-            disc_fe_history=list(disc_summary["fe_history"]),
-            disc_hv_history=list(disc_summary["hv_history"]),
-            disc_archive_y=disc_archive_y,
-            ehvi_fe_history=list(ehvi_summary["fe_history"]),
-            ehvi_hv_history=list(ehvi_summary["hv_history"]),
-            ehvi_archive_y=ehvi_archive_y,
-            true_pareto=true_pareto,
-        )
-        summary = {
-            "problem": args.problem,
-            "dim": int(args.dim),
-            "seed": int(args.seed),
-            "surrogate_model": surrogate_model_name(args),
-            "agent_name": args.agent_name,
-            "compare_ehvi": True,
-            "disc": disc_summary,
-            "ehvi": ehvi_summary,
-            "compare_plot_path": compare_plot_path,
-        }
-    else:
-        summary = disc_summary
-
-    if args.output_json:
-        out_path = Path(args.output_json)
-        out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
-    if bool(args.compare_ehvi):
-        print(
-            f"mean reward ({n_evo_steps} steps) | "
-            f"DISC = {summary['disc']['mean_reward_40_steps']:.6f} | "
-            f"EHVI = {summary['ehvi']['mean_reward_40_steps']:.6f}"
-        )
-        print(
-            json.dumps(
-                {
-                    "problem": summary["problem"],
-                    "dim": summary["dim"],
-                    "seed": summary["seed"],
-                    "surrogate_model": summary["surrogate_model"],
-                    "agent_name": summary["agent_name"],
-                    "compare_ehvi": True,
-                    "disc_final_hv": summary["disc"]["final_hv"],
-                    "ehvi_final_hv": summary["ehvi"]["final_hv"],
-                    "compare_plot_path": summary["compare_plot_path"],
-                },
-                indent=2,
+        if bool(args.compare_ehvi):
+            ehvi_summary, ehvi_archive_y = run_policy_rollout(
+                args=args,
+                problem=problem,
+                nsga2_problem=nsga2_problem,
+                ref_point=ref_point,
+                true_pareto=true_pareto,
+                archive_x_init=archive_x,
+                archive_y_init=archive_y,
+                policy_name="ehvi",
+                infill_criterion=ExpectedHypervolumeImprovement(ref_point=ref_point, n_samples=64),
+                compare_mode=True,
+                make_plot=False,
+                logger=log,
+                reward_scheme_id=int(reward_scheme_id),
             )
-        )
-    else:
-        print(f"mean reward ({n_evo_steps} steps) = {summary['mean_reward_40_steps']:.6f}")
-        print(json.dumps({k: v for k, v in summary.items() if k not in {"history", "final_front", "fe_history", "hv_history"}}, indent=2))
+            compare_plot_path = plot_compare_results(
+                args=args,
+                disc_fe_history=list(disc_summary["fe_history"]),
+                disc_hv_history=list(disc_summary["hv_history"]),
+                disc_archive_y=disc_archive_y,
+                ehvi_fe_history=list(ehvi_summary["fe_history"]),
+                ehvi_hv_history=list(ehvi_summary["hv_history"]),
+                ehvi_archive_y=ehvi_archive_y,
+                true_pareto=true_pareto,
+            )
+            summary = {
+                "problem": args.problem,
+                "dim": int(args.dim),
+                "seed": int(args.seed),
+                "surrogate_model": surrogate_model_name(args),
+                "agent_name": args.agent_name,
+                "compare_ehvi": True,
+                "reward_scheme": int(reward_scheme_id),
+                "disc": disc_summary,
+                "ehvi": ehvi_summary,
+                "compare_plot_path": compare_plot_path,
+                "test_log_path": str(test_log_path.resolve()),
+            }
+        else:
+            summary = disc_summary
+            summary["test_log_path"] = str(test_log_path.resolve())
+
+        if args.output_json:
+            out_path = Path(args.output_json)
+            out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+        if bool(args.compare_ehvi):
+            log(
+                f"mean reward ({n_evo_steps} steps) | "
+                f"DISC = {summary['disc']['mean_reward_40_steps']:.6f} | "
+                f"EHVI = {summary['ehvi']['mean_reward_40_steps']:.6f}"
+            )
+            log(
+                json.dumps(
+                    {
+                        "problem": summary["problem"],
+                        "dim": summary["dim"],
+                        "seed": summary["seed"],
+                        "surrogate_model": summary["surrogate_model"],
+                        "agent_name": summary["agent_name"],
+                        "compare_ehvi": True,
+                        "disc_final_hv": summary["disc"]["final_hv"],
+                        "ehvi_final_hv": summary["ehvi"]["final_hv"],
+                        "compare_plot_path": summary["compare_plot_path"],
+                        "test_log_path": summary["test_log_path"],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            log(f"mean reward ({n_evo_steps} steps) = {summary['mean_reward_40_steps']:.6f}")
+            log(json.dumps({k: v for k, v in summary.items() if k not in {"history", "final_front", "fe_history", "hv_history"}}, indent=2))
+    finally:
+        log_fp.close()
 
 
 if __name__ == "__main__":
