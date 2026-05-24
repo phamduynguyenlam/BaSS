@@ -17,6 +17,7 @@ import torch
 from agents.disc import Disc
 from infill import ExpectedHypervolumeImprovement
 from nsga2_solver import run_surrogate_nsga2
+from nsga3_solver import run_surrogate_nsga3
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
@@ -132,6 +133,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--softmax", action="store_true")
     parser.add_argument("--compare_ehvi", action="store_true")
+    parser.add_argument("--nsga3", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
     args = parser.parse_args()
@@ -246,6 +248,27 @@ def make_nsga2_problem_adapter(problem, n_obj: int):
             self.xu = np.full(int(problem.dim), float(problem.upper), dtype=np.float32)
 
     return _ProblemAdapter()
+
+
+def run_surrogate_optimizer(
+    *,
+    args: argparse.Namespace,
+    nsga_problem,
+    archive_x: np.ndarray,
+    nsga2_surrogate: Any | None,
+    nsga2_models: list[Any] | None,
+    step: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    solver = run_surrogate_nsga3 if bool(getattr(args, "nsga3", False)) else run_surrogate_nsga2
+    return solver(
+        gps=nsga2_models,
+        surrogate=nsga2_surrogate,
+        problem=nsga_problem,
+        archive_x=archive_x,
+        pop_size=int(args.offspring_size),
+        surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+        seed=int(args.seed) + int(step),
+    )
 
 
 def predict_surrogate_mean(surrogate: Any, x: np.ndarray) -> np.ndarray:
@@ -846,16 +869,14 @@ def run_policy_rollout(
             surrogate = build_surrogate(args, archive_x, archive_y, existing_surrogate=reuse_surrogate)
             surrogate_needs_refit = False
 
-        offspring_pop_size = int(args.offspring_size)
         nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
-        offspring_x, offspring_pred = run_surrogate_nsga2(
-            gps=nsga2_models,
-            surrogate=nsga2_surrogate,
-            problem=nsga2_problem,
+        offspring_x, offspring_pred = run_surrogate_optimizer(
+            args=args,
+            nsga_problem=nsga2_problem,
             archive_x=archive_x,
-            pop_size=offspring_pop_size,
-            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
-            seed=int(args.seed) + step,
+            nsga2_surrogate=nsga2_surrogate,
+            nsga2_models=nsga2_models,
+            step=step,
         )
         offspring_x = np.asarray(offspring_x, dtype=np.float32)
         offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
@@ -979,6 +1000,7 @@ def run_policy_rollout(
         "init_fe": int(args.init_fe),
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
+        "candidate_solver": "nsga3" if bool(getattr(args, "nsga3", False)) else "nsga2",
         "reward_lambda": float(args.reward_lambda),
         "reward_scheme": int(reward_scheme_id),
         "ensemble_model": int(args.ensemble_model),
@@ -1025,6 +1047,7 @@ def main() -> None:
         nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
         true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
+        log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
         log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
         disc = build_disc(args, map_location=str(args.device))
         disc_summary, disc_archive_y = run_policy_rollout(
