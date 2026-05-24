@@ -39,6 +39,30 @@ def hypervolume(values: np.ndarray, ref_point: np.ndarray) -> float:
     return float(HV(ref_point=np.asarray(ref_point, dtype=np.float32))(front))
 
 
+def _filter_candidates_on_front(
+    selected_objectives: np.ndarray,
+    combined_front: np.ndarray,
+    *,
+    atol: float = 1e-6,
+) -> np.ndarray:
+    selected_arr = np.asarray(selected_objectives, dtype=np.float32)
+    if selected_arr.ndim == 1:
+        selected_arr = selected_arr.reshape(1, -1)
+    combined_arr = np.asarray(combined_front, dtype=np.float32)
+    if combined_arr.size == 0:
+        return selected_arr[:0]
+
+    keep: list[np.ndarray] = []
+    for candidate in selected_arr:
+        matches = np.isclose(combined_arr, candidate[None, :], atol=float(atol), rtol=0.0)
+        if bool(np.any(np.all(matches, axis=1))):
+            keep.append(candidate)
+
+    if len(keep) == 0:
+        return np.empty((0, selected_arr.shape[1]), dtype=np.float32)
+    return np.asarray(keep, dtype=np.float32)
+
+
 def hv_improvement_reward(
     *,
     previous_archive: np.ndarray,
@@ -94,18 +118,20 @@ def reward_scheme_1(
     ref_point: np.ndarray,
     reward_lambda: float = 10.0,
 ) -> float:
-    """Distance-to-front reward, scaled and offset; returns 0 if HV doesn't improve."""
+    """Distance-to-front reward, scaled and offset; positive iff a new point stays on the updated Pareto front."""
     previous_front = pareto_front(np.asarray(previous_front, dtype=np.float32))
     selected_objectives = np.asarray(selected_objectives, dtype=np.float32)
-
-    prev_hv = hypervolume(previous_front, ref_point)
-    next_hv = hypervolume(np.vstack([previous_front, selected_objectives]), ref_point)
-    if next_hv <= prev_hv:
+    combined_front = pareto_front(np.vstack([previous_front, selected_objectives]))
+    front_members = _filter_candidates_on_front(selected_objectives, combined_front)
+    if front_members.shape[0] == 0:
         return -1.0
+
+    if previous_front.size == 0:
+        return float(max(1e-6, 1.0 + float(reward_lambda) * float(front_members.shape[0])))
 
     reward = 0.0
     origin = np.zeros(previous_front.shape[1], dtype=np.float32)
-    for candidate in selected_objectives:
+    for candidate in front_members:
         distances = np.abs(previous_front - candidate).sum(axis=1)
         nearest_idx = int(np.argmin(distances))
         d_i = float(distances[nearest_idx])
@@ -121,18 +147,20 @@ def reward_scheme_2(
     ref_point: np.ndarray,
     reward_lambda: float = 10.0,
 ) -> float:
-    """Distance-to-front reward; returns 0 if HV doesn't improve."""
+    """Distance-to-front reward; positive iff a new point stays on the updated Pareto front."""
     previous_front = pareto_front(np.asarray(previous_front, dtype=np.float32))
     selected_objectives = np.asarray(selected_objectives, dtype=np.float32)
-
-    prev_hv = hypervolume(previous_front, ref_point)
-    next_hv = hypervolume(np.vstack([previous_front, selected_objectives]), ref_point)
-    if next_hv <= prev_hv:
+    combined_front = pareto_front(np.vstack([previous_front, selected_objectives]))
+    front_members = _filter_candidates_on_front(selected_objectives, combined_front)
+    if front_members.shape[0] == 0:
         return 0.0
+
+    if previous_front.size == 0:
+        return float(max(1e-6, float(reward_lambda) * float(front_members.shape[0])))
 
     reward = 0.0
     origin = np.zeros(previous_front.shape[1], dtype=np.float32)
-    for candidate in selected_objectives:
+    for candidate in front_members:
         distances = np.abs(previous_front - candidate).sum(axis=1)
         nearest_idx = int(np.argmin(distances))
         d_i = float(distances[nearest_idx])
