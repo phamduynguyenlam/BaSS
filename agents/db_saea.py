@@ -169,24 +169,31 @@ class DBSAEAAgent(nn.Module):
         x_true_norm = self._normalize_by_range(x_true, lower, upper)
         x_sur_norm = self._normalize_by_range(x_sur, lower, upper)
 
-        y_true_min = y_true.amin(dim=1, keepdim=True)
-        y_true_max = y_true.amax(dim=1, keepdim=True)
-        y_true_norm = ((y_true - y_true_min) / (y_true_max - y_true_min).clamp_min(1e-12)).clamp(0.0, 1.0)
-
-        y_sur_min = y_sur.amin(dim=1, keepdim=True)
-        y_sur_max = y_sur.amax(dim=1, keepdim=True)
-        y_sur_norm = ((y_sur - y_sur_min) / (y_sur_max - y_sur_min).clamp_min(1e-12)).clamp(0.0, 1.0)
+        stacked_y = torch.cat([y_true, y_sur], dim=1)
+        y_min = stacked_y.amin(dim=1, keepdim=True)
+        y_max = stacked_y.amax(dim=1, keepdim=True)
+        y_true_norm = ((y_true - y_min) / (y_max - y_min).clamp_min(1e-12)).clamp(0.0, 1.0)
+        y_sur_norm = ((y_sur - y_min) / (y_max - y_min).clamp_min(1e-12)).clamp(0.0, 1.0)
         sigma_sur_norm = sigma_sur / sigma_sur.amax(dim=1, keepdim=True).clamp_min(1e-12)
 
-        e_true = torch.stack([x_true_norm.unsqueeze(1), y_true_norm.unsqueeze(2).expand(-1, -1, n_dim, -1)], dim=-1)
-        e_surr = torch.stack(
-            [
-                x_sur_norm.unsqueeze(1),
-                y_sur_norm.unsqueeze(2).expand(-1, -1, n_dim, -1),
-                sigma_sur_norm.unsqueeze(2).expand(-1, -1, n_dim, -1),
-            ],
-            dim=-1,
-        )
+        x_true_expand = x_true_norm.transpose(1, 2).unsqueeze(1).unsqueeze(-1)
+        x_true_expand = x_true_expand.expand(-1, y_true_norm.size(-1), -1, -1, -1)
+        y_true_expand = y_true_norm.transpose(1, 2).unsqueeze(2).unsqueeze(-1)
+        y_true_expand = y_true_expand.expand(-1, -1, x_true_norm.size(-1), -1, -1)
+        e_true = torch.cat((x_true_expand, y_true_expand), dim=-1)
+
+        x_sur_expand = x_sur_norm.transpose(1, 2).unsqueeze(1).unsqueeze(-1)
+        x_sur_expand = x_sur_expand.expand(-1, y_sur_norm.size(-1), -1, -1, -1)
+        y_sur_expand = y_sur_norm.transpose(1, 2).unsqueeze(2).unsqueeze(-1)
+        y_sur_expand = y_sur_expand.expand(-1, -1, x_sur_norm.size(-1), -1, -1)
+        sigma_expand = sigma_sur_norm.transpose(1, 2).unsqueeze(2).unsqueeze(-1)
+        sigma_expand = sigma_expand.expand(-1, -1, x_sur_norm.size(-1), -1, -1)
+        e_surr = torch.cat((x_sur_expand, y_sur_expand, sigma_expand), dim=-1)
+
+        if archive_mask is None:
+            archive_mask = torch.ones(batch_size, n_archive, device=device, dtype=torch.bool)
+        if candidate_mask is None:
+            candidate_mask = torch.ones(batch_size, n_candidates, device=device, dtype=torch.bool)
 
         return {
             "E_true": e_true,
