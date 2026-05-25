@@ -75,6 +75,7 @@ def compute_test_reward(
     selected_objectives: np.ndarray,
     ref_point: np.ndarray,
     reward_lambda: float,
+    true_pareto_hv: float | None = None,
 ) -> float:
     if int(reward_scheme_id) == 1:
         return float(
@@ -95,11 +96,14 @@ def compute_test_reward(
             )
         )
     if int(reward_scheme_id) == 3:
+        if true_pareto_hv is None:
+            raise ValueError("reward_scheme_3 requires true_pareto_hv in tester_copy.")
         return float(
             reward_scheme_3(
                 previous_front=previous_front,
                 selected_objectives=selected_objectives,
                 ref_point=ref_point,
+                true_pareto_hv=float(true_pareto_hv),
             )
         )
     raise ValueError(f"Unsupported reward_scheme_id for tester_copy: {reward_scheme_id}")
@@ -134,6 +138,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--softmax", action="store_true")
     parser.add_argument("--compare_ehvi", action="store_true")
     parser.add_argument("--nsga3", action="store_true")
+    parser.add_argument("--pseudo_front_only", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
     args = parser.parse_args()
@@ -364,6 +369,32 @@ def sample_offspring_index_softmax(logits: torch.Tensor) -> tuple[int, np.ndarra
     probs = torch.softmax(logits.reshape(-1), dim=-1)
     idx = int(torch.distributions.Categorical(probs=probs).sample().item())
     return idx, probs.detach().cpu().numpy().astype(np.float32).reshape(-1)
+
+
+def get_pseudo_front_indices(values: np.ndarray, *, atol: float = 1e-6) -> np.ndarray:
+    values_arr = np.asarray(values, dtype=np.float32)
+    if values_arr.ndim != 2:
+        raise ValueError(f"values must be 2D, got shape={values_arr.shape}.")
+    front = pareto_front(values_arr)
+    keep: list[int] = []
+    for idx in range(int(values_arr.shape[0])):
+        row = values_arr[idx]
+        matches = np.isclose(front, row[None, :], atol=float(atol), rtol=0.0)
+        if bool(np.any(np.all(matches, axis=1))):
+            keep.append(int(idx))
+    if len(keep) == 0:
+        return np.arange(int(values_arr.shape[0]), dtype=np.int64)
+    return np.asarray(keep, dtype=np.int64)
+
+
+def select_offspring_index_pseudo_front_qmax(logits: torch.Tensor, surrogate_y: np.ndarray) -> tuple[int, np.ndarray]:
+    logits_1d = logits.reshape(-1)
+    q_values = logits_1d.detach().cpu().numpy().astype(np.float32)
+    pseudo_idx = get_pseudo_front_indices(surrogate_y)
+    if pseudo_idx.size <= 0:
+        raise ValueError("Pseudo-front selection requires at least one offspring candidate.")
+    local_best = int(np.argmax(q_values[pseudo_idx]))
+    return int(pseudo_idx[local_best]), q_values
 
 
 def _predict_tabpfn_minmax_mean_std_softmax(
@@ -848,6 +879,7 @@ def run_policy_rollout(
     make_plot: bool = True,
     logger=print,
     reward_scheme_id: int = 1,
+    true_pareto_hv: float | None = None,
 ) -> tuple[dict[str, Any], np.ndarray]:
     archive_x = np.asarray(archive_x_init, dtype=np.float32).copy()
     archive_y = np.asarray(archive_y_init, dtype=np.float32).copy()
@@ -906,7 +938,9 @@ def run_policy_rollout(
                     epsilon=0.05,
                 )
                 logits = out["logits"].reshape(-1)
-            if bool(args.softmax):
+            if bool(getattr(args, "pseudo_front_only", False)):
+                selected_idx, _ = select_offspring_index_pseudo_front_qmax(logits, offspring_pred)
+            elif bool(args.softmax):
                 selected_idx, _ = sample_offspring_index_softmax(logits)
             else:
                 selected_idx, _ = select_offspring_index_epsilon_greedy(logits, epsilon=0.05)
@@ -938,6 +972,7 @@ def run_policy_rollout(
             selected_objectives=selected_true,
             ref_point=ref_point,
             reward_lambda=float(args.reward_lambda),
+            true_pareto_hv=true_pareto_hv,
         )
 
         archive_x = np.vstack([archive_x, selected_x]).astype(np.float32)
@@ -1001,6 +1036,7 @@ def run_policy_rollout(
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
         "candidate_solver": "nsga3" if bool(getattr(args, "nsga3", False)) else "nsga2",
+        "pseudo_front_only": bool(getattr(args, "pseudo_front_only", False)),
         "reward_lambda": float(args.reward_lambda),
         "reward_scheme": int(reward_scheme_id),
         "ensemble_model": int(args.ensemble_model),
@@ -1046,9 +1082,13 @@ def main() -> None:
         ref_point = get_reference_point(args.problem, n_obj=n_obj)
         nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
         true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
+        true_pareto_hv = None if true_pareto is None else float(hypervolume(true_pareto, ref_point))
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
         log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
+        log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
         log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
+        if int(reward_scheme_id) == 3 and true_pareto_hv is None:
+            raise RuntimeError(f"Could not compute true Pareto HV for reward scheme 3 on {args.problem}-{int(args.dim)}D.")
         disc = build_disc(args, map_location=str(args.device))
         disc_summary, disc_archive_y = run_policy_rollout(
             args=args,
@@ -1064,6 +1104,7 @@ def main() -> None:
             make_plot=not bool(args.compare_ehvi),
             logger=log,
             reward_scheme_id=int(reward_scheme_id),
+            true_pareto_hv=true_pareto_hv,
         )
         if bool(args.compare_ehvi):
             ehvi_summary, ehvi_archive_y = run_policy_rollout(
@@ -1080,6 +1121,7 @@ def main() -> None:
                 make_plot=False,
                 logger=log,
                 reward_scheme_id=int(reward_scheme_id),
+                true_pareto_hv=true_pareto_hv,
             )
             compare_plot_path = plot_compare_results(
                 args=args,

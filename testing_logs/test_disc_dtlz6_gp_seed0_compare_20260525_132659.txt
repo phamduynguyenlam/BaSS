@@ -1,0 +1,66 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz6_gp_seed0_compare_20260525_132659.txt
+reference_point = [16.8257999420166, 16.91939926147461, 17.76460075378418] (from ref_points_hv.py)
+candidate_solver = nsga2
+reward_scheme = rs1 | reward_lambda = 10.0000
+[disc] iter 0 | front = 63 | HV = 0.711916
+[disc] iter 1 | front = 53 | HV = 450.814157 | reward = 4.311461
+[disc] iter 2 | front = 45 | HV = 677.349647 | reward = 3.360337
+[disc] iter 3 | front = 45 | HV = 727.782055 | reward = 2.989417
+[disc] iter 4 | front = 43 | HV = 778.380279 | reward = 3.591338
+[disc] iter 5 | front = 41 | HV = 865.290365 | reward = 4.312637
+[disc] iter 6 | front = 42 | HV = 926.559527 | reward = 2.246469
+[disc] iter 7 | front = 43 | HV = 959.611724 | reward = 2.261140
+[disc] iter 8 | front = 43 | HV = 981.448779 | reward = 2.701216
+[disc] iter 9 | front = 44 | HV = 983.389288 | reward = 1.671048
+[disc] iter 10 | front = 45 | HV = 983.656946 | reward = 1.910508
+[disc] iter 11 | front = 46 | HV = 1012.701181 | reward = 1.900007
+[disc] iter 12 | front = 44 | HV = 1140.543079 | reward = 3.020360
+[disc] iter 13 | front = 45 | HV = 1160.990437 | reward = 2.132799
+[disc] iter 14 | front = 46 | HV = 1161.601569 | reward = 1.235034
+[disc] iter 15 | front = 46 | HV = 1236.623921 | reward = 2.037966
+[disc] iter 16 | front = 47 | HV = 1239.860519 | reward = 2.355414
+[disc] iter 17 | front = 48 | HV = 1262.345555 | reward = 1.980965
+[disc] iter 18 | front = 48 | HV = 1262.345555 | reward = -1.000000
+[disc] iter 19 | front = 46 | HV = 1304.213935 | reward = 2.328540
+[disc] iter 20 | front = 46 | HV = 1304.213935 | reward = -1.000000
+[disc] iter 21 | front = 44 | HV = 1327.068467 | reward = 4.493729
+[disc] iter 22 | front = 41 | HV = 1400.983707 | reward = 4.511739
+[disc] iter 23 | front = 42 | HV = 1405.550791 | reward = 3.431609
+[disc] iter 24 | front = 43 | HV = 1416.696449 | reward = 4.205688
+[disc] iter 25 | front = 43 | HV = 1416.696449 | reward = -1.000000
+[disc] iter 26 | front = 43 | HV = 1416.696449 | reward = -1.000000
+[disc] iter 27 | front = 44 | HV = 1419.426489 | reward = 1.571249
+[disc] iter 28 | front = 44 | HV = 1430.857932 | reward = 2.312958
+[disc] iter 29 | front = 45 | HV = 1433.355068 | reward = 2.785235
+[disc] iter 30 | front = 46 | HV = 1492.469432 | reward = 3.016009
+[disc] iter 31 | front = 47 | HV = 1496.479073 | reward = 1.640578
+[disc] iter 32 | front = 47 | HV = 1496.479073 | reward = -1.000000
+[disc] iter 33 | front = 48 | HV = 1501.078988 | reward = 2.820442
+[disc] iter 34 | front = 47 | HV = 1511.449377 | reward = 3.380031
+[disc] iter 35 | front = 48 | HV = 1513.445002 | reward = 2.685400
+[disc] iter 36 | front = 48 | HV = 1513.445002 | reward = -1.000000
+[disc] iter 37 | front = 49 | HV = 1549.258563 | reward = 3.181511
+[disc] iter 38 | front = 49 | HV = 1549.258563 | reward = 2.853657
+[disc] iter 39 | front = 50 | HV = 1549.258563 | reward = 1.515634
+[disc] iter 40 | front = 50 | HV = 1549.258563 | reward = -1.000000
+[ehvi] iter 0 | front = 63 | HV = 0.711916
+[ehvi] iter 1 | front = 54 | HV = 378.467244 | reward = 4.031307
+[ehvi] iter 2 | front = 48 | HV = 585.613050 | reward = 2.608278
+[ehvi] iter 3 | front = 43 | HV = 859.990509 | reward = 4.087297
+[ehvi] iter 4 | front = 43 | HV = 1002.030403 | reward = 3.847815
+[ehvi] iter 5 | front = 38 | HV = 1221.338374 | reward = 3.353741
+[ehvi] iter 6 | front = 35 | HV = 1284.316583 | reward = 3.947576
+[ehvi] iter 7 | front = 33 | HV = 1430.979542 | reward = 3.874741
+[ehvi] iter 8 | front = 24 | HV = 1919.639590 | reward = 4.499527
+[ehvi] iter 9 | front = 23 | HV = 1928.825268 | reward = 6.230061
+[ehvi] iter 10 | front = 23 | HV = 1928.825268 | reward = -1.000000
+[ehvi] iter 11 | front = 23 | HV = 1928.825268 | reward = -1.000000
+[ehvi] iter 12 | front = 24 | HV = 1931.466451 | reward = 4.817141
+[ehvi] iter 13 | front = 24 | HV = 1931.466451 | reward = -1.000000
+[ehvi] iter 14 | front = 24 | HV = 1931.466451 | reward = -1.000000
+[ehvi] iter 15 | front = 24 | HV = 2003.965406 | reward = 4.861645
+[ehvi] iter 16 | front = 25 | HV = 2067.202272 | reward = 2.223231
+[ehvi] iter 17 | front = 25 | HV = 2067.202272 | reward = -1.000000
+[ehvi] iter 18 | front = 25 | HV = 2080.002538 | reward = 3.075321
+[ehvi] iter 19 | front = 25 | HV = 2080.002538 | reward = -1.000000
+[ehvi] iter 20 | front = 25 | HV = 2080.002538 | reward = -1.000000

@@ -174,9 +174,10 @@ def reward_scheme_3(
     previous_front: np.ndarray,
     selected_objectives: np.ndarray,
     ref_point: np.ndarray,
+    true_pareto_hv: float,
     hv_epsilon: float = 1e-8,
 ) -> float:
-    """Scaled normalized HV improvement; returns 0 if HV doesn't improve."""
+    """Scaled normalized HV improvement against the remaining gap to the true Pareto-front HV."""
     previous_front = np.asarray(previous_front, dtype=np.float32)
     selected_objectives = np.asarray(selected_objectives, dtype=np.float32)
     combined_front = np.vstack([previous_front, selected_objectives])
@@ -185,4 +186,5 @@ def reward_scheme_3(
     next_hv = hypervolume(combined_front, ref_point)
     if next_hv <= prev_hv:
         return 0.0
-    return float(50.0 * (next_hv - prev_hv) / (prev_hv + float(hv_epsilon)))
+    remaining_gap = max(float(true_pareto_hv) - float(next_hv), float(hv_epsilon))
+    return float(50.0 * (float(next_hv) - float(prev_hv)) / remaining_gap)

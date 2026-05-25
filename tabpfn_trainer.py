@@ -292,6 +292,12 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
             dtype=np.float32,
         )
         self.init_hv = float(hypervolume(self.archive_y, self.ref_point))
+        self.true_pareto_hv = compute_true_pareto_hv(
+            self.problem_name,
+            self.dim,
+            self.ref_point,
+            int(self.archive_y.shape[1]),
+        )
         self.nsga2_problem = make_nsga2_problem_adapter(self.problem, int(self.archive_y.shape[1]))
         fit_started_at = time.perf_counter()
         self._fit_surrogate()
@@ -322,6 +328,7 @@ class SynchronizedTabPFNEnv(DiscSAEAEnv):
             ref_point=self.ref_point,
             reward_scheme_id=int(self.cfg["reward_scheme"]),
             reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
+            true_pareto_hv=self.true_pareto_hv,
         )
 
         self.t += 1

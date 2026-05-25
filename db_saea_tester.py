@@ -13,7 +13,6 @@ import numpy as np
 import torch
 
 from agents.db_saea import DBSAEAAgent
-from agents.disc import Disc, DiscAF
 from infill import ExpectedHypervolumeImprovement
 from nsga2_solver import run_surrogate_nsga2
 from nsga3_solver import run_surrogate_nsga3
@@ -106,7 +105,7 @@ def compute_test_reward(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run DISC-guided surrogate-assisted optimization with 80 LHS init + 40 evolution steps."
+        description="Run DB-SAEA surrogate-assisted optimization with 80 LHS init + 40 evolution steps."
     )
     parser.add_argument("--problem", type=str, default="ZDT1", choices=SUPPORTED_PROBLEMS)
     parser.add_argument("--dim", type=int, default=30)
@@ -126,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kan_hidden_width", type=int, default=10)
     parser.add_argument("--kan_grid", type=int, default=5)
     parser.add_argument("--hidden_dim", type=int, default=64)
-    parser.add_argument("--n_heads", type=int, default=8)
+    parser.add_argument("--n_heads", type=int, default=1)
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--compare_ehvi", action="store_true")
@@ -148,13 +147,9 @@ def set_seed(seed: int) -> None:
 
 def resolve_agent_cls(agent_name: str):
     name = str(agent_name).strip().lower()
-    if name == "disc":
-        return Disc
-    if name == "disc_af":
-        return DiscAF
     if name == "db_saea":
         return DBSAEAAgent
-    raise ValueError(f"Unsupported agent_name: {agent_name}")
+    raise ValueError(f"Unsupported agent_name for db_saea_tester: {agent_name}")
 
 
 def latin_hypercube_sample(
@@ -302,28 +297,28 @@ def build_offspring_sigma(
     return local_sigma.astype(np.float32)
 
 
-def build_disc(
+def build_db_saea_agent(
     args: argparse.Namespace,
     *,
     map_location: str,
-    agent_name: str = "disc",
-) -> Disc:
+    agent_name: str = "db_saea",
+) -> DBSAEAAgent:
     agent_cls = resolve_agent_cls(agent_name)
-    disc = agent_cls(
+    agent = agent_cls(
         hidden_dim=int(args.hidden_dim),
         n_heads=int(args.n_heads),
         ff_dim=int(args.ff_dim),
         dropout=float(args.dropout),
         logit_scale=float(args.logit_scale),
     ).to(map_location)
-    disc.eval()
+    agent.eval()
 
     if args.agent_pth and not bool(args.random_model):
         state = torch.load(args.agent_pth, map_location=map_location)
         state_dict = state["state_dict"] if isinstance(state, dict) and "state_dict" in state else state
-        disc.load_state_dict(state_dict, strict=True)
+        agent.load_state_dict(state_dict, strict=True)
 
-    return disc
+    return agent
 
 
 def select_offspring_index_epsilon_greedy(logits: torch.Tensor, epsilon: float = 0.05) -> tuple[int, np.ndarray]:
@@ -370,6 +365,9 @@ def select_offspring_index_pseudo_front_qmax(logits: torch.Tensor, surrogate_y: 
 class StepRecord:
     step: int
     fe: int
+    strategy_action: int
+    strategy_name: str
+    regenerate_attempts: int
     selected_index: int
     selected_x: list[float]
     surrogate_y: list[float]
@@ -389,7 +387,7 @@ def run_policy_rollout(
     archive_x_init: np.ndarray,
     archive_y_init: np.ndarray,
     policy_name: str,
-    disc: Any | None = None,
+    db_saea_agent: Any | None = None,
     infill_criterion: ExpectedHypervolumeImprovement | None = None,
     compare_mode: bool = False,
     make_plot: bool = True,
@@ -409,58 +407,82 @@ def run_policy_rollout(
     logger(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
 
     surrogate = build_surrogate(args, archive_x, archive_y)
+    max_regenerate_attempts = 5
     for step in range(n_evo_steps):
-        nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
-        offspring_x, offspring_pred = run_surrogate_optimizer(
-            args=args,
-            nsga_problem=nsga2_problem,
-            archive_x=archive_x,
-            nsga2_surrogate=nsga2_surrogate,
-            nsga2_models=nsga2_models,
-            step=step,
-        )
-        offspring_x = np.asarray(offspring_x, dtype=np.float32)
-        offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
-        offspring_sigma = build_offspring_sigma(
-            archive_x=archive_x,
-            archive_y=archive_y,
-            offspring_x=offspring_x,
-            surrogate=surrogate,
-        )
+        regenerate_attempts = 0
+        strategy_action = -1
+        strategy_name = "-"
+        while True:
+            nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
+            offspring_x, offspring_pred = run_surrogate_optimizer(
+                args=args,
+                nsga_problem=nsga2_problem,
+                archive_x=archive_x,
+                nsga2_surrogate=nsga2_surrogate,
+                nsga2_models=nsga2_models,
+                step=step + regenerate_attempts,
+            )
+            offspring_x = np.asarray(offspring_x, dtype=np.float32)
+            offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
+            offspring_sigma = build_offspring_sigma(
+                archive_x=archive_x,
+                archive_y=archive_y,
+                offspring_x=offspring_x,
+                surrogate=surrogate,
+            )
 
-        if policy_name.lower() == "disc":
-            if disc is None:
-                raise ValueError("DISC rollout requires a built disc model.")
-            progress = float(step) / float(max(n_evo_steps - 1, 1))
-            with torch.no_grad():
-                out = disc(
-                    x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
-                    y_true=torch.from_numpy(archive_y).to(device=args.device, dtype=torch.float32),
-                    x_sur=torch.from_numpy(offspring_x).to(device=args.device, dtype=torch.float32),
-                    y_sur=torch.from_numpy(offspring_pred).to(device=args.device, dtype=torch.float32),
-                    sigma_sur=torch.from_numpy(offspring_sigma).to(device=args.device, dtype=torch.float32),
-                    progress=progress,
-                    lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
-                    upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
-                    decode_type="epsilon_greedy",
-                    epsilon=0.05,
+            if policy_name.lower() == "db_saea":
+                if db_saea_agent is None:
+                    raise ValueError("DB-SAEA rollout requires a built db_saea model.")
+                progress = float(step) / float(max(n_evo_steps - 1, 1))
+                with torch.no_grad():
+                    out = db_saea_agent(
+                        x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
+                        y_true=torch.from_numpy(archive_y).to(device=args.device, dtype=torch.float32),
+                        x_sur=torch.from_numpy(offspring_x).to(device=args.device, dtype=torch.float32),
+                        y_sur=torch.from_numpy(offspring_pred).to(device=args.device, dtype=torch.float32),
+                        sigma_sur=torch.from_numpy(offspring_sigma).to(device=args.device, dtype=torch.float32),
+                        progress=progress,
+                        lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
+                        upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
+                        decode_type="epsilon_greedy",
+                        epsilon=0.05,
+                    )
+                strategy_action = int(out["action"].reshape(-1)[0].item())
+                if strategy_action == 0 and regenerate_attempts >= max_regenerate_attempts:
+                    strategy_action = 1 + int(torch.argmax(out["q_values"].reshape(-1)[1:]).item())
+                if strategy_action == 0:
+                    regenerate_attempts += 1
+                    continue
+                strategy_name = str(db_saea_agent.ACTION_NAMES[int(strategy_action)])
+                selected_idx, _ = db_saea_agent.select_candidate_from_action(
+                    action_idx=int(strategy_action),
+                    archive_y=archive_y,
+                    candidate_mean=offspring_pred,
+                    candidate_std=offspring_sigma,
+                    seed=int(args.seed) + step + regenerate_attempts,
                 )
-                logits = out["logits"].reshape(-1)
-            if bool(getattr(args, "pseudo_front_only", False)):
-                selected_idx, _ = select_offspring_index_pseudo_front_qmax(logits, offspring_pred)
+                if selected_idx is None:
+                    raise RuntimeError(f"DB-SAEA strategy action {strategy_action} did not produce a candidate index.")
+                break
+            elif policy_name.lower() == "ehvi":
+                if infill_criterion is None:
+                    raise ValueError("EHVI rollout requires an infill criterion.")
+                strategy_action = -1
+                strategy_name = "ehvi"
+                selected_idx, _ = infill_criterion.select_index(
+                    archive_y=archive_y,
+                    candidate_mean=offspring_pred,
+                    candidate_std=offspring_sigma,
+                    seed=int(args.seed) + step,
+                )
+                break
             else:
-                selected_idx, _ = select_offspring_index_epsilon_greedy(logits, epsilon=0.05)
-        elif policy_name.lower() == "ehvi":
+                raise ValueError(f"Unsupported policy_name: {policy_name}")
+
+        if policy_name.lower() == "ehvi":
             if infill_criterion is None:
                 raise ValueError("EHVI rollout requires an infill criterion.")
-            selected_idx, _ = infill_criterion.select_index(
-                archive_y=archive_y,
-                candidate_mean=offspring_pred,
-                candidate_std=offspring_sigma,
-                seed=int(args.seed) + step,
-            )
-        else:
-            raise ValueError(f"Unsupported policy_name: {policy_name}")
 
         selected_x = offspring_x[selected_idx : selected_idx + 1]
         selected_pred = offspring_pred[selected_idx]
@@ -486,6 +508,9 @@ def run_policy_rollout(
         record = StepRecord(
             step=step + 1,
             fe=fe,
+            strategy_action=int(strategy_action),
+            strategy_name=str(strategy_name),
+            regenerate_attempts=int(regenerate_attempts),
             selected_index=selected_idx,
             selected_x=selected_x.reshape(-1).astype(float).tolist(),
             surrogate_y=selected_pred.astype(float).tolist(),
@@ -499,7 +524,8 @@ def run_policy_rollout(
 
         logger(
             f"{prefix}iter {record.step} | front = {front_size} | "
-            f"HV = {record.hv:.6f} | reward = {record.reward:.6f}"
+            f"HV = {record.hv:.6f} | reward = {record.reward:.6f} | "
+            f"strategy = {record.strategy_name} | regenerations = {record.regenerate_attempts}"
         )
         surrogate = build_surrogate(args, archive_x, archive_y)
 
@@ -602,7 +628,7 @@ def plot_results(
     archive_y: np.ndarray,
     true_pareto: np.ndarray | None,
 ) -> str:
-    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
+    agent_tag = str(getattr(args, "agent_name", "db_saea")).lower()
     plot_path = args.plot_path
     if plot_path is None:
         plot_path = str(Path("png") / f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}.png")
@@ -680,15 +706,15 @@ def plot_results(
 def plot_compare_results(
     *,
     args: argparse.Namespace,
-    disc_fe_history: list[int],
-    disc_hv_history: list[float],
-    disc_archive_y: np.ndarray,
+    db_saea_fe_history: list[int],
+    db_saea_hv_history: list[float],
+    db_saea_archive_y: np.ndarray,
     ehvi_fe_history: list[int],
     ehvi_hv_history: list[float],
     ehvi_archive_y: np.ndarray,
     true_pareto: np.ndarray | None,
 ) -> str:
-    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
+    agent_tag = str(getattr(args, "agent_name", "db_saea")).lower()
     plot_path = args.plot_path
     if plot_path is None:
         plot_path = str(Path("png") / f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}_compare.png")
@@ -700,9 +726,9 @@ def plot_compare_results(
     plot_file = Path(plot_path)
     plot_file.parent.mkdir(parents=True, exist_ok=True)
 
-    disc_front = pareto_front(disc_archive_y)
+    db_saea_front = pareto_front(db_saea_archive_y)
     ehvi_front = pareto_front(ehvi_archive_y)
-    n_obj = int(disc_archive_y.shape[1])
+    n_obj = int(db_saea_archive_y.shape[1])
 
     fig = plt.figure(figsize=(13, 5))
     ax_hv = fig.add_subplot(1, 2, 1)
@@ -711,7 +737,7 @@ def plot_compare_results(
     else:
         ax_pf = fig.add_subplot(1, 2, 2)
 
-    ax_hv.plot(disc_fe_history, disc_hv_history, marker="o", linewidth=1.8, markersize=4, label="DISC")
+    ax_hv.plot(db_saea_fe_history, db_saea_hv_history, marker="o", linewidth=1.8, markersize=4, label="DB-SAEA")
     ax_hv.plot(ehvi_fe_history, ehvi_hv_history, marker="s", linewidth=1.8, markersize=4, label="EHVI")
     ax_hv.set_xlabel("FE")
     ax_hv.set_ylabel("Hypervolume")
@@ -720,9 +746,9 @@ def plot_compare_results(
     ax_hv.legend()
 
     if n_obj == 2:
-        ax_pf.scatter(disc_archive_y[:, 0], disc_archive_y[:, 1], s=14, alpha=0.22, label="DISC Archive")
+        ax_pf.scatter(db_saea_archive_y[:, 0], db_saea_archive_y[:, 1], s=14, alpha=0.22, label="DB-SAEA Archive")
         ax_pf.scatter(ehvi_archive_y[:, 0], ehvi_archive_y[:, 1], s=14, alpha=0.22, label="EHVI Archive")
-        ax_pf.scatter(disc_front[:, 0], disc_front[:, 1], s=28, alpha=0.95, marker="o", label="DISC PF")
+        ax_pf.scatter(db_saea_front[:, 0], db_saea_front[:, 1], s=28, alpha=0.95, marker="o", label="DB-SAEA PF")
         ax_pf.scatter(ehvi_front[:, 0], ehvi_front[:, 1], s=28, alpha=0.95, marker="x", label="EHVI PF")
         if true_pareto is not None and true_pareto.shape[1] >= 2:
             order = np.argsort(true_pareto[:, 0])
@@ -731,9 +757,9 @@ def plot_compare_results(
         ax_pf.set_ylabel("f2")
         ax_pf.grid(True, alpha=0.3)
     elif n_obj == 3:
-        ax_pf.scatter(disc_archive_y[:, 0], disc_archive_y[:, 1], disc_archive_y[:, 2], s=12, alpha=0.18, label="DISC Archive")
+        ax_pf.scatter(db_saea_archive_y[:, 0], db_saea_archive_y[:, 1], db_saea_archive_y[:, 2], s=12, alpha=0.18, label="DB-SAEA Archive")
         ax_pf.scatter(ehvi_archive_y[:, 0], ehvi_archive_y[:, 1], ehvi_archive_y[:, 2], s=12, alpha=0.18, label="EHVI Archive")
-        ax_pf.scatter(disc_front[:, 0], disc_front[:, 1], disc_front[:, 2], s=26, alpha=0.95, marker="o", label="DISC PF")
+        ax_pf.scatter(db_saea_front[:, 0], db_saea_front[:, 1], db_saea_front[:, 2], s=26, alpha=0.95, marker="o", label="DB-SAEA PF")
         ax_pf.scatter(ehvi_front[:, 0], ehvi_front[:, 1], ehvi_front[:, 2], s=26, alpha=0.95, marker="x", label="EHVI PF")
         if true_pareto is not None and true_pareto.shape[1] >= 3:
             ax_pf.scatter(true_pareto[:, 0], true_pareto[:, 1], true_pareto[:, 2], s=8, alpha=0.20, label="True PF")
@@ -763,7 +789,7 @@ def save_npy_outputs(
 ) -> dict[str, str]:
     out_dir = Path("npy")
     out_dir.mkdir(parents=True, exist_ok=True)
-    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
+    agent_tag = str(getattr(args, "agent_name", "db_saea")).lower()
     stem = f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}"
 
     paths = {
@@ -783,7 +809,7 @@ def save_npy_outputs(
     return {key: str(path.resolve()) for key, path in paths.items()}
 
 
-def main(agent_name: str = "disc") -> None:
+def main(agent_name: str = "db_saea") -> None:
     args = parse_args()
     args.agent_name = str(agent_name).lower()
     set_seed(int(args.seed))
@@ -815,8 +841,8 @@ def main(agent_name: str = "disc") -> None:
         log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
         if int(reward_scheme_id) == 3 and true_pareto_hv is None:
             raise RuntimeError(f"Could not compute true Pareto HV for reward scheme 3 on {args.problem}-{int(args.dim)}D.")
-        disc = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
-        disc_summary, disc_archive_y = run_policy_rollout(
+        db_saea_agent = build_db_saea_agent(args, map_location=str(args.device), agent_name=args.agent_name)
+        db_saea_summary, db_saea_archive_y = run_policy_rollout(
             args=args,
             problem=problem,
             nsga2_problem=nsga2_problem,
@@ -824,8 +850,8 @@ def main(agent_name: str = "disc") -> None:
             true_pareto=true_pareto,
             archive_x_init=archive_x,
             archive_y_init=archive_y,
-            policy_name="disc",
-            disc=disc,
+            policy_name="db_saea",
+            db_saea_agent=db_saea_agent,
             compare_mode=bool(args.compare_ehvi),
             make_plot=not bool(args.compare_ehvi),
             logger=log,
@@ -851,9 +877,9 @@ def main(agent_name: str = "disc") -> None:
             )
             compare_plot_path = plot_compare_results(
                 args=args,
-                disc_fe_history=list(disc_summary["fe_history"]),
-                disc_hv_history=list(disc_summary["hv_history"]),
-                disc_archive_y=disc_archive_y,
+                db_saea_fe_history=list(db_saea_summary["fe_history"]),
+                db_saea_hv_history=list(db_saea_summary["hv_history"]),
+                db_saea_archive_y=db_saea_archive_y,
                 ehvi_fe_history=list(ehvi_summary["fe_history"]),
                 ehvi_hv_history=list(ehvi_summary["hv_history"]),
                 ehvi_archive_y=ehvi_archive_y,
@@ -867,13 +893,13 @@ def main(agent_name: str = "disc") -> None:
                 "agent_name": args.agent_name,
                 "compare_ehvi": True,
                 "reward_scheme": int(reward_scheme_id),
-                "disc": disc_summary,
+                "db_saea": db_saea_summary,
                 "ehvi": ehvi_summary,
                 "compare_plot_path": compare_plot_path,
                 "test_log_path": str(test_log_path.resolve()),
             }
         else:
-            summary = disc_summary
+            summary = db_saea_summary
             summary["test_log_path"] = str(test_log_path.resolve())
 
         if args.output_json:
@@ -883,7 +909,7 @@ def main(agent_name: str = "disc") -> None:
         if bool(args.compare_ehvi):
             log(
                 f"mean reward ({n_evo_steps} steps) | "
-                f"DISC = {summary['disc']['mean_reward_40_steps']:.6f} | "
+                f"DB-SAEA = {summary['db_saea']['mean_reward_40_steps']:.6f} | "
                 f"EHVI = {summary['ehvi']['mean_reward_40_steps']:.6f}"
             )
             log(
@@ -895,7 +921,7 @@ def main(agent_name: str = "disc") -> None:
                         "surrogate_model": summary["surrogate_model"],
                         "agent_name": summary["agent_name"],
                         "compare_ehvi": True,
-                        "disc_final_hv": summary["disc"]["final_hv"],
+                        "db_saea_final_hv": summary["db_saea"]["final_hv"],
                         "ehvi_final_hv": summary["ehvi"]["final_hv"],
                         "compare_plot_path": summary["compare_plot_path"],
                         "test_log_path": summary["test_log_path"],

@@ -15,7 +15,6 @@ import torch.optim as optim
 import numpy as np
 
 from agents.db_saea import DBSAEAAgent
-from agents.disc import Disc, DiscAF
 from nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
@@ -51,7 +50,7 @@ class TrainConfig:
     epsilon_end: float = 0.05
     epsilon_decay_iters: int = 10
     hidden_dim: int = 64
-    n_heads: int = 8
+    n_heads: int = 1
     ff_dim: int = 256
     dropout: float = 0.0
     logit_scale: float = 1.0
@@ -71,7 +70,7 @@ class TrainConfig:
     rollout_device: str = "cpu"
     surrogate_device: str = "cpu"
     ensemble_model: int = 8
-    agent_name: str = "disc"
+    agent_name: str = "db_saea"
     agent_pth: str | None = None
 
 
@@ -108,22 +107,20 @@ def clone_state_dict_cpu(model):
 
 def resolve_agent_cls(agent_name):
     name = str(agent_name).strip().lower()
-    if name == "disc":
-        return Disc
-    if name == "disc_af":
-        return DiscAF
     if name == "db_saea":
         return DBSAEAAgent
-    raise ValueError(f"Unsupported agent_name: {agent_name}")
+    raise ValueError(f"Unsupported agent_name for db_saea_trainer: {agent_name}")
 
 
 def select_action_from_output(out):
+    if "action" in out:
+        return int(out["action"].reshape(-1)[0].item())
     ranking = out["ranking"]
     return int(ranking[0, 0].item())
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train DISC with surrogate-assisted environments.")
+    parser = argparse.ArgumentParser(description="Train DB-SAEA with surrogate-assisted environments.")
     parser.add_argument("--problem", type=str, default="ZDT1")
     parser.add_argument("--dim", type=int, default=30)
     parser.add_argument("--epoch", type=int, default=None)
@@ -691,6 +688,7 @@ class DiscSAEAEnv:
         self.true_pareto_hv = None
         self.surrogate = None
         self._surrogate_dirty = False
+        self._regenerate_counter = 0
 
     def _progress(self):
         return float(self.t) / float(max(self.max_steps - 1, 1))
@@ -726,7 +724,7 @@ class DiscSAEAEnv:
             archive_x=self.archive_x,
             pop_size=int(self.cfg["offspring_size"]),
             surrogate_nsga_steps=int(self.cfg["surrogate_nsga_steps"]),
-            seed=int(self.seed) + int(self.t),
+            seed=int(self.seed) + int(self.t) + 97 * int(self._regenerate_counter),
         )
         self.offspring_x = np.asarray(offspring_x, dtype=np.float32)
         self.offspring_y = np.asarray(offspring_y, dtype=np.float32)
@@ -751,6 +749,7 @@ class DiscSAEAEnv:
 
     def reset(self):
         self.t = 0
+        self._regenerate_counter = 0
         self.archive_x = latin_hypercube_sample(
             n_samples=int(self.cfg["init_size"]),
             dim=self.dim,
@@ -796,6 +795,38 @@ class DiscSAEAEnv:
         )
 
         self.t += 1
+        self._regenerate_counter = 0
+        done = self.t >= self.max_steps
+        self._surrogate_dirty = bool(not done)
+        if not done:
+            self._refresh_offspring()
+        return self._build_state(), float(reward), bool(done)
+
+    def regenerate_offspring(self):
+        self._regenerate_counter += 1
+        self._refresh_offspring()
+        return self._build_state(), 0.0, False
+
+    def evaluate_selected_index(self, selected_idx: int):
+        chosen_idx = int(np.clip(int(selected_idx), 0, int(self.offspring_x.shape[0]) - 1))
+        previous_archive_y = np.asarray(self.archive_y, dtype=np.float32).copy()
+        chosen_x = self.offspring_x[chosen_idx : chosen_idx + 1]
+        chosen_y = np.asarray(self.problem.evaluate(chosen_x), dtype=np.float32)
+
+        self.archive_x = np.vstack([self.archive_x, chosen_x]).astype(np.float32)
+        self.archive_y = np.vstack([self.archive_y, chosen_y]).astype(np.float32)
+
+        reward = compute_env_reward(
+            previous_archive_y=previous_archive_y,
+            selected_y=chosen_y,
+            ref_point=self.ref_point,
+            reward_scheme_id=int(self.cfg["reward_scheme"]),
+            reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
+            true_pareto_hv=self.true_pareto_hv,
+        )
+
+        self.t += 1
+        self._regenerate_counter = 0
         done = self.t >= self.max_steps
         self._surrogate_dirty = bool(not done)
         if not done:
@@ -808,7 +839,7 @@ class DiscSAEAEnv:
 
 def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, epsilon):
     device = str(cfg_dict.get("rollout_device", "cpu"))
-    agent_cls = resolve_agent_cls(cfg_dict.get("agent_name", "disc"))
+    agent_cls = resolve_agent_cls(cfg_dict.get("agent_name", "db_saea"))
     agent = agent_cls(
         hidden_dim=cfg_dict["hidden_dim"],
         n_heads=cfg_dict["n_heads"],
@@ -833,6 +864,8 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
     transitions = []
 
     done = False
+    max_regenerate_attempts = 5
+    regenerate_attempts = 0
     while not done:
         with torch.no_grad():
             out = agent(
@@ -849,7 +882,24 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
             )
 
         action = select_action_from_output(out)
-        next_state, reward, done = env.step(action, state)
+        if int(action) == 0 and int(regenerate_attempts) >= int(max_regenerate_attempts):
+            action = 1 + int(torch.argmax(out["q_values"].reshape(-1)[1:]).item())
+
+        if int(action) == 0:
+            next_state, reward, done = env.regenerate_offspring()
+            regenerate_attempts += 1
+        else:
+            selected_idx, _ = agent.select_candidate_from_action(
+                action_idx=int(action),
+                archive_y=state["y_true"],
+                candidate_mean=state["y_sur"],
+                candidate_std=state["sigma_sur"],
+                seed=int(seed) + len(transitions),
+            )
+            if selected_idx is None:
+                raise RuntimeError(f"DB-SAEA action {action} did not produce a candidate index.")
+            next_state, reward, done = env.evaluate_selected_index(int(selected_idx))
+            regenerate_attempts = 0
 
         transitions.append((
             state["x_true"],
@@ -877,7 +927,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
     return {
         "transitions": transitions,
         "episode_reward": float(total_reward),
-        "episode_steps": int(len(transitions)),
+        "episode_steps": int(env.t),
         "env_key": env_key(problem_name, dim),
         "init_hv": init_hv,
         "final_hv": float(env.current_hv()),
@@ -908,7 +958,7 @@ def save_training_checkpoint(
     rs_tag = f"rs{int(cfg.reward_scheme)}"
     hidden_tag = f"h{int(cfg.hidden_dim)}"
     problem_tag = str(problem_name).lower()
-    agent_tag = str(getattr(cfg, "agent_name", "disc")).lower()
+    agent_tag = str(getattr(cfg, "agent_name", "db_saea")).lower()
     file_prefix = f"{agent_tag}_problem_{problem_tag}_{rs_tag}_{hidden_tag}"
 
     if mean_reward > best_reward:
@@ -942,7 +992,7 @@ def save_training_checkpoint(
     return best_reward
 
 
-def train_disc_ddqn_ray(
+def train_db_saea_ddqn_ray(
     problem_name="ZDT1",
     dim=30,
     epoch=None,
@@ -958,7 +1008,7 @@ def train_disc_ddqn_ray(
     rollout_device="cpu",
     surrogate_device="cpu",
     use_ray=False,
-    agent_name="disc",
+    agent_name="db_saea",
     agent_pth=None,
 ):
     cfg = TrainConfig()
@@ -996,7 +1046,7 @@ def train_disc_ddqn_ray(
     cfg_dict = cfg.__dict__.copy()
     os.makedirs("training_logs", exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_prefix = f"{cfg.agent_name}_trainer" if cfg.agent_name != "disc" else "trainer"
+    log_prefix = f"{cfg.agent_name}_trainer"
     log_path = os.path.join(
         "training_logs",
         f"{log_prefix}_{cfg.heldout_problem.lower()}_set{cfg.training_set}_{ts}.txt",
@@ -1340,7 +1390,7 @@ def train_disc_ddqn_ray(
 
 if __name__ == "__main__":
     args = parse_args()
-    train_disc_ddqn_ray(
+    train_db_saea_ddqn_ray(
         problem_name=args.problem,
         dim=int(args.dim),
         epoch=args.epoch,
