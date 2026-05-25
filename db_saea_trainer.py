@@ -1045,10 +1045,20 @@ def train_db_saea_ddqn_ray(
     actual_num_workers = min(int(cfg.num_workers), len(env_specs))
     cfg_dict = cfg.__dict__.copy()
     os.makedirs("training_logs", exist_ok=True)
+    log_subdir_map = {
+        "disc": "disc",
+        "disc_af": "disc_af",
+        "db_saea": "db-saea",
+    }
+    log_dir = os.path.join(
+        "training_logs",
+        log_subdir_map.get(str(cfg.agent_name), str(cfg.agent_name)),
+    )
+    os.makedirs(log_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_prefix = f"{cfg.agent_name}_trainer"
     log_path = os.path.join(
-        "training_logs",
+        log_dir,
         f"{log_prefix}_{cfg.heldout_problem.lower()}_set{cfg.training_set}_{ts}.txt",
     )
     log_fp = open(log_path, "a", encoding="utf-8", buffering=1)
