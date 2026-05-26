@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -241,7 +242,7 @@ def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: 
             archive_x=archive_x,
             archive_y=archive_y,
             seed=int(args.seed),
-            nu=int(getattr(args, "gp_nu", 5)),
+            nu=float(getattr(args, "gp_nu", 5.0)),
         )
 
     if name == "tabpfn":
@@ -879,6 +880,7 @@ def main(agent_name: str = "disc") -> None:
         n_evo_steps = int(args.max_fe) - int(args.init_fe)
         reward_scheme_id = resolve_test_reward_scheme(args)
 
+        lhs_started_at = time.perf_counter()
         archive_x = latin_hypercube_sample(
             n_samples=int(args.init_fe),
             dim=int(args.dim),
@@ -886,6 +888,7 @@ def main(agent_name: str = "disc") -> None:
             upper=problem.upper,
             seed=int(args.seed),
         )
+        lhs_sample_sec = time.perf_counter() - lhs_started_at
         archive_y = np.asarray(problem.evaluate(archive_x), dtype=np.float32)
         n_obj = int(archive_y.shape[1])
         ref_point = get_reference_point(args.problem, n_obj=n_obj)
@@ -895,6 +898,7 @@ def main(agent_name: str = "disc") -> None:
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
         log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
         log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
+        log(f"lhs_sample_sec = {lhs_sample_sec:.3f}")
         log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
         compare_infill_name = resolve_compare_infill_name(args)
         compare_infill = None if compare_infill_name is None else build_compare_infill_criterion(compare_infill_name, ref_point=ref_point)
@@ -903,7 +907,10 @@ def main(agent_name: str = "disc") -> None:
         log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
         if int(reward_scheme_id) == 3 and true_pareto_hv is None:
             raise RuntimeError(f"Could not compute true Pareto HV for reward scheme 3 on {args.problem}-{int(args.dim)}D.")
+        agent_load_started_at = time.perf_counter()
         disc = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
+        agent_load_sec = time.perf_counter() - agent_load_started_at
+        log(f"agent_load_sec = {agent_load_sec:.3f}")
         disc_summary, disc_archive_y = run_policy_rollout(
             args=args,
             problem=problem,

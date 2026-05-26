@@ -36,15 +36,27 @@ def _suppress_gp_warnings() -> None:
 class GPSurrogateModel(SurrogateModel):
     n_var: int
     n_obj: int
-    nu: int = 5
+    nu: float = 5.0
     gps: list[GaussianProcessRegressor] = field(init=False, repr=False)
+
+    @staticmethod
+    def _effective_matern_nu(nu: float) -> float:
+        nu_value = float(nu)
+        if np.isclose(nu_value, 1.0):
+            return 0.5
+        if np.isclose(nu_value, 3.0):
+            return 1.5
+        if np.isclose(nu_value, 5.0):
+            return 2.5
+        return nu_value
 
     def __post_init__(self) -> None:
         super().__init__()
         _suppress_gp_warnings()
         self.n_var = int(self.n_var)
         self.n_obj = int(self.n_obj)
-        self.nu = int(self.nu)
+        self.nu = float(self.nu)
+        effective_nu = self._effective_matern_nu(self.nu)
         self.gps = []
 
         def constrained_optimization(obj_func, initial_theta, bounds):
@@ -52,11 +64,11 @@ class GPSurrogateModel(SurrogateModel):
             return opt_res.x, opt_res.fun
 
         for _ in range(self.n_obj):
-            if self.nu > 0:
+            if effective_nu > 0:
                 main_kernel = Matern(
                     length_scale=np.ones(self.n_var),
                     length_scale_bounds=(np.sqrt(1e-3), np.sqrt(1e3)),
-                    nu=0.5 * self.nu,
+                    nu=effective_nu,
                 )
             else:
                 main_kernel = RBF(
@@ -131,11 +143,13 @@ class GPSurrogateModel(SurrogateModel):
             dd_d = d * ell**2
             dd = safe_divide(dd_n, dd_d)
 
-            if self.nu == 1:
+            effective_nu = self._effective_matern_nu(self.nu)
+
+            if np.isclose(effective_nu, 0.5):
                 d_k = -sf2 * np.exp(-d) * dd
-            elif self.nu == 3:
+            elif np.isclose(effective_nu, 1.5):
                 d_k = -3 * sf2 * np.exp(-np.sqrt(3) * d) * d * dd
-            elif self.nu == 5:
+            elif np.isclose(effective_nu, 2.5):
                 d_k = -5.0 / 3.0 * sf2 * np.exp(-np.sqrt(5) * d) * (1 + np.sqrt(5) * d) * d * dd
             else:
                 d_k = -sf2 * np.exp(-0.5 * d**2) * d * dd
@@ -168,11 +182,11 @@ class GPSurrogateModel(SurrogateModel):
                 hd_d = d_exp**2 * np.expand_dims(ell**2, (0, 1, 3))
                 hd = safe_divide(hd_n, hd_d)
 
-                if self.nu == 1:
+                if np.isclose(effective_nu, 0.5):
                     h_k = -sf2 * np.exp(-d_exp) * (hd - dd_exp**2)
-                elif self.nu == 3:
+                elif np.isclose(effective_nu, 1.5):
                     h_k = -3 * sf2 * np.exp(-np.sqrt(3) * d_exp) * (d_exp * hd + (1 - np.sqrt(3) * d_exp) * dd_exp**2)
-                elif self.nu == 5:
+                elif np.isclose(effective_nu, 2.5):
                     h_k = (
                         -5.0
                         / 3.0
@@ -219,12 +233,12 @@ def fit_gp_surrogates(
     archive_x: np.ndarray,
     archive_y: np.ndarray,
     seed: int = 0,
-    nu: int = 5,
+    nu: float = 5.0,
 ) -> GPSurrogateModel:
     del seed
     x_arr = np.asarray(archive_x, dtype=np.float64)
     y_arr = np.asarray(archive_y, dtype=np.float64)
-    model = GPSurrogateModel(n_var=int(x_arr.shape[1]), n_obj=int(y_arr.shape[1]), nu=int(nu))
+    model = GPSurrogateModel(n_var=int(x_arr.shape[1]), n_obj=int(y_arr.shape[1]), nu=float(nu))
     return model.fit(x_arr, y_arr)
 
 

@@ -542,7 +542,7 @@ class TabPFNMinMaxSurrogate:
         self.debug = bool(debug)
         if self.n_estimators <= 0:
             raise ValueError(f"n_estimators must be positive, got {n_estimators}.")
-        self.n_bins = 10
+        self.n_bins = 20
 
         self._x_min: np.ndarray | None = None
         self._x_rng: np.ndarray | None = None

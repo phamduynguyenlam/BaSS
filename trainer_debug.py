@@ -169,7 +169,7 @@ def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y):
             archive_x=np.asarray(archive_x, dtype=np.float32),
             archive_y=np.asarray(archive_y, dtype=np.float32),
             seed=int(cfg_dict.get("seed", 0)),
-            nu=int(cfg_dict.get("gp_nu", 5)),
+            nu=float(cfg_dict.get("gp_nu", 5.0)),
         )
 
     if surrogate_name == "kan":

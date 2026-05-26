@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--surrogate_nsga_steps", type=int, default=30)
     parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "tabpfn"])
     parser.add_argument("--ensemble_model", type=int, default=8)
-    parser.add_argument("--gp_nu", type=int, default=5)
+    parser.add_argument("--gp_nu", type=float, default=5.0)
     parser.add_argument("--beta", type=float, default=0.1)
     return parser.parse_args()
 
