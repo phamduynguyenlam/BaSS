@@ -275,7 +275,10 @@ class _LCBObjectiveWrapper:
 
     def predict_mean(self, x: np.ndarray) -> np.ndarray:
         x_arr = np.asarray(x, dtype=np.float32)
-        mean = np.asarray(self.base_surrogate.predict_mean(x_arr), dtype=np.float32)
+        if hasattr(self.base_surrogate, "predict_mean"):
+            mean = np.asarray(self.base_surrogate.predict_mean(x_arr), dtype=np.float32)
+        else:
+            mean = np.asarray(self.base_surrogate.predict(x_arr), dtype=np.float32)
         try:
             std = np.asarray(self.base_surrogate.predict_std(x_arr), dtype=np.float32)
         except Exception:
