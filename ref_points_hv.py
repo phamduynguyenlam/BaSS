@@ -24,6 +24,19 @@ REFERENCE_POINTS: dict[str, np.ndarray] = {
 }
 
 
+TRUE_PARETO_HV: dict[str, float | None] = {
+    "ZDT1-30D-2obj": 5.719354044543262,
+    "ZDT2-30D-2obj": 6.223946695544582,
+    "ZDT3-30D-2obj": 6.094808522998477,
+    "DTLZ2-30D-3obj": 22.96077571671862,
+    "DTLZ3-30D-3obj": 11686863768.88893,
+    "DTLZ4-30D-3obj": 20.389607896010133,
+    "DTLZ5-30D-3obj": 18.6312399291,
+    "DTLZ6-30D-3obj": 5038.7719154348,
+    "DTLZ7-30D-3obj": 18.1549480498,
+}
+
+
 def get_reference_point(problem_name: str, *, n_obj: int | None = None) -> np.ndarray:
     key = str(problem_name).upper()
     if key == "DTLZ1":
@@ -36,3 +49,11 @@ def get_reference_point(problem_name: str, *, n_obj: int | None = None) -> np.nd
     if n_obj is None:
         return ref.astype(np.float32)
     return ref[: int(n_obj)].astype(np.float32)
+
+
+def get_true_pareto_hv(problem_name: str, *, dim: int, n_obj: int) -> float | None:
+    key = f"{str(problem_name).upper()}-{int(dim)}D-{int(n_obj)}obj"
+    if key not in TRUE_PARETO_HV:
+        raise ValueError(f"Unsupported problem/dim/objective setting for true Pareto HV: {key}")
+    value = TRUE_PARETO_HV[key]
+    return None if value is None else float(value)

@@ -1,0 +1,116 @@
+{
+  "ZDT1-30D-2obj": {
+    "problem": "ZDT1",
+    "dim": 30,
+    "n_obj": 2,
+    "reference_point": [
+      0.9994000196456909,
+      6.057600021362305
+    ],
+    "true_pareto_hv": 5.719354044543262,
+    "n_points": 400,
+    "status": "ok"
+  },
+  "ZDT2-30D-2obj": {
+    "problem": "ZDT2",
+    "dim": 30,
+    "n_obj": 2,
+    "reference_point": [
+      0.9994000196456909,
+      6.895999908447266
+    ],
+    "true_pareto_hv": 6.223946695544582,
+    "n_points": 400,
+    "status": "ok"
+  },
+  "ZDT3-30D-2obj": {
+    "problem": "ZDT3",
+    "dim": 30,
+    "n_obj": 2,
+    "reference_point": [
+      0.9994000196456909,
+      6.05709981918335
+    ],
+    "true_pareto_hv": 6.094808522998477,
+    "n_points": 100,
+    "status": "ok"
+  },
+  "DTLZ2-30D-3obj": {
+    "problem": "DTLZ2",
+    "dim": 30,
+    "n_obj": 3,
+    "reference_point": [
+      2.8389999866485596,
+      2.901099920272827,
+      2.8575000762939453
+    ],
+    "true_pareto_hv": 22.96077571671862,
+    "n_points": 136,
+    "status": "ok"
+  },
+  "DTLZ3-30D-3obj": {
+    "problem": "DTLZ3",
+    "dim": 30,
+    "n_obj": 3,
+    "reference_point": [
+      2421.642578125,
+      1905.2767333984375,
+      2532.968994140625
+    ],
+    "true_pareto_hv": 11686863768.88893,
+    "n_points": 136,
+    "status": "ok"
+  },
+  "DTLZ4-30D-3obj": {
+    "problem": "DTLZ4",
+    "dim": 30,
+    "n_obj": 3,
+    "reference_point": [
+      3.2674999237060547,
+      2.6442999839782715,
+      2.426300048828125
+    ],
+    "true_pareto_hv": 20.389607896010133,
+    "n_points": 136,
+    "status": "ok"
+  },
+  "DTLZ5-30D-3obj": {
+    "problem": "DTLZ5",
+    "dim": 30,
+    "n_obj": 3,
+    "reference_point": [
+      2.6672000885009766,
+      2.8008999824523926,
+      2.8575000762939453
+    ],
+    "true_pareto_hv": null,
+    "n_points": 0,
+    "status": "failed_to_load_true_pf"
+  },
+  "DTLZ6-30D-3obj": {
+    "problem": "DTLZ6",
+    "dim": 30,
+    "n_obj": 3,
+    "reference_point": [
+      16.8257999420166,
+      16.91939926147461,
+      17.76460075378418
+    ],
+    "true_pareto_hv": null,
+    "n_points": 0,
+    "status": "failed_to_load_true_pf"
+  },
+  "DTLZ7-30D-3obj": {
+    "problem": "DTLZ7",
+    "dim": 30,
+    "n_obj": 3,
+    "reference_point": [
+      0.9983999729156494,
+      0.9961000084877014,
+      22.811399459838867
+    ],
+    "true_pareto_hv": null,
+    "n_points": 0,
+    "status": "failed_to_load_true_pf"
+  }
+}
