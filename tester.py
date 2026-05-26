@@ -26,7 +26,7 @@ from infill import (
 from nsga2_solver import run_surrogate_nsga2
 from nsga3_solver import run_surrogate_nsga3
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
-from ref_points_hv import get_reference_point
+from ref_points_hv import get_reference_point, get_true_pareto_hv
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
 from surrogate.surrogate_model import (
     estimate_uncertainty,
@@ -1079,16 +1079,18 @@ def main(agent_name: str = "disc") -> None:
         true_pareto_load_started_at = time.perf_counter()
         true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
         true_pareto_load_sec = time.perf_counter() - true_pareto_load_started_at
+        true_pareto_hv_started_at = time.perf_counter()
         true_pareto_hv = None
-        true_pareto_hv_sec = 0.0
+        if int(reward_scheme_id) == 3:
+            true_pareto_hv = get_true_pareto_hv(args.problem, dim=int(args.dim), n_obj=n_obj)
+        true_pareto_hv_sec = time.perf_counter() - true_pareto_hv_started_at
         compare_infill_name = resolve_compare_infill_name(args)
         compare_algo_name = None if args.compare_algo is None else str(args.compare_algo).lower()
         compare_infill = None if compare_infill_name is None else build_compare_infill_criterion(compare_infill_name, ref_point=ref_point)
         compare_label = None if compare_infill_name is None else compare_infill_display_name(compare_infill_name)
-        if int(reward_scheme_id) == 3:
+        if int(reward_scheme_id) == 3 and true_pareto_hv is None:
             raise RuntimeError(
-                "tester.py no longer computes true_pareto_hv online. "
-                "Use a precomputed true Pareto HV source before testing reward scheme 3."
+                f"No precomputed true Pareto HV found for {args.problem}-{int(args.dim)}D-{int(n_obj)}obj in ref_points_hv.py."
             )
         agent_load_started_at = time.perf_counter()
         disc, agent_load_breakdown = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
