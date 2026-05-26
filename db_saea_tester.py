@@ -163,6 +163,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_fe", type=int, default=120)
     parser.add_argument("--init_fe", type=int, default=80)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
+    parser.add_argument("--tabpfn_nsga_steps", type=int, default=None)
+    parser.add_argument("--gp_nsga_steps", type=int, default=None)
     parser.add_argument("--offspring_size", type=int, default=80)
     parser.add_argument("--mutation_sigma", type=float, default=0.12)
     parser.add_argument("--logit_scale", type=float, default=5.0)
@@ -179,6 +181,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb"])
     parser.add_argument("--beta", type=float, default=1.0)
+    parser.add_argument("--hybrid_nsga", action="store_true")
     parser.add_argument("--compare_infill", type=str, default=None)
     parser.add_argument("--nsga3", action="store_true")
     parser.add_argument("--pseudo_front_only", action="store_true")
@@ -230,9 +233,9 @@ def latin_hypercube_sample(
     return (lower_arr + lhs * (upper_arr - lower_arr)).astype(np.float32)
 
 
-def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: np.ndarray):
-    name = surrogate_model_name(args)
-    if name == "gp":
+def build_named_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: np.ndarray, name: str):
+    surrogate_name = str(name).lower()
+    if surrogate_name == "gp":
         return fit_gp_surrogates(
             archive_x=archive_x,
             archive_y=archive_y,
@@ -240,14 +243,14 @@ def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: 
             nu=float(getattr(args, "gp_nu", 5.0)),
         )
 
-    if name == "tabpfn":
+    if surrogate_name == "tabpfn":
         return fit_tabpfn_surrogate(
             archive_x=archive_x,
             archive_y=archive_y,
             device=str(args.device),
         )
 
-    if name == "kan":
+    if surrogate_name == "kan":
         kan_models = fit_kan_surrogates(
             archive_x=archive_x,
             archive_y=archive_y,
@@ -259,7 +262,11 @@ def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: 
         )
         return KANSurrogateModel(models=kan_models, device=str(args.device))
 
-    raise ValueError(f"Unsupported surrogate_model: {name}")
+    raise ValueError(f"Unsupported surrogate_model: {surrogate_name}")
+
+
+def build_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archive_y: np.ndarray):
+    return build_named_surrogate(args, archive_x, archive_y, surrogate_model_name(args))
 
 
 def surrogate_or_models_for_nsga2(surrogate: Any) -> tuple[Any | None, list[Any] | None]:
@@ -332,6 +339,94 @@ def run_surrogate_optimizer(
         pop_size=int(args.offspring_size),
         surrogate_nsga_steps=int(args.surrogate_nsga_steps),
         seed=int(args.seed) + int(step),
+    )
+
+
+def resolve_surrogate_nsga_steps(args: argparse.Namespace, surrogate_name: str) -> int:
+    name = str(surrogate_name).lower()
+    if name == "tabpfn" and getattr(args, "tabpfn_nsga_steps", None) is not None:
+        return int(args.tabpfn_nsga_steps)
+    if name == "gp" and getattr(args, "gp_nsga_steps", None) is not None:
+        return int(args.gp_nsga_steps)
+    return int(args.surrogate_nsga_steps)
+
+
+def _generate_single_offspring_pool(
+    *,
+    args: argparse.Namespace,
+    nsga_problem,
+    archive_x: np.ndarray,
+    archive_y: np.ndarray,
+    surrogate: Any,
+    step: int,
+    surrogate_name: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    local_args = argparse.Namespace(**vars(args))
+    local_args.surrogate_nsga_steps = int(resolve_surrogate_nsga_steps(args, surrogate_name))
+    nsga2_surrogate, nsga2_models = prepare_nsga_surrogate(args, surrogate)
+    offspring_x, offspring_pred = run_surrogate_optimizer(
+        args=local_args,
+        nsga_problem=nsga_problem,
+        archive_x=archive_x,
+        nsga2_surrogate=nsga2_surrogate,
+        nsga2_models=nsga2_models,
+        step=step,
+    )
+    offspring_x = np.asarray(offspring_x, dtype=np.float32)
+    offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
+    offspring_sigma = build_offspring_sigma(
+        archive_x=archive_x,
+        archive_y=archive_y,
+        offspring_x=offspring_x,
+        surrogate=surrogate,
+    )
+    return offspring_x, offspring_pred, np.asarray(offspring_sigma, dtype=np.float32)
+
+
+def generate_offspring_pool(
+    *,
+    args: argparse.Namespace,
+    nsga_problem,
+    archive_x: np.ndarray,
+    archive_y: np.ndarray,
+    step: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if not bool(getattr(args, "hybrid_nsga", False)):
+        surrogate = build_surrogate(args, archive_x, archive_y)
+        return _generate_single_offspring_pool(
+            args=args,
+            nsga_problem=nsga_problem,
+            archive_x=archive_x,
+            archive_y=archive_y,
+            surrogate=surrogate,
+            step=step,
+            surrogate_name=surrogate_model_name(args),
+        )
+
+    gp_surrogate = build_named_surrogate(args, archive_x, archive_y, "gp")
+    tabpfn_surrogate = build_named_surrogate(args, archive_x, archive_y, "tabpfn")
+    gp_x, gp_pred, gp_sigma = _generate_single_offspring_pool(
+        args=args,
+        nsga_problem=nsga_problem,
+        archive_x=archive_x,
+        archive_y=archive_y,
+        surrogate=gp_surrogate,
+        step=int(step) * 2,
+        surrogate_name="gp",
+    )
+    tab_x, tab_pred, tab_sigma = _generate_single_offspring_pool(
+        args=args,
+        nsga_problem=nsga_problem,
+        archive_x=archive_x,
+        archive_y=archive_y,
+        surrogate=tabpfn_surrogate,
+        step=int(step) * 2 + 1,
+        surrogate_name="tabpfn",
+    )
+    return (
+        np.vstack([gp_x, tab_x]).astype(np.float32),
+        np.vstack([gp_pred, tab_pred]).astype(np.float32),
+        np.vstack([gp_sigma, tab_sigma]).astype(np.float32),
     )
 
 
@@ -491,29 +586,18 @@ def run_policy_rollout(
     prefix = f"[{policy_name}] " if compare_mode else ""
     logger(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
 
-    surrogate = build_surrogate(args, archive_x, archive_y)
     max_regenerate_attempts = 5
     for step in range(n_evo_steps):
         regenerate_attempts = 0
         strategy_action = -1
         strategy_name = "-"
         while True:
-            nsga2_surrogate, nsga2_models = prepare_nsga_surrogate(args, surrogate)
-            offspring_x, offspring_pred = run_surrogate_optimizer(
+            offspring_x, offspring_pred, offspring_sigma = generate_offspring_pool(
                 args=args,
                 nsga_problem=nsga2_problem,
                 archive_x=archive_x,
-                nsga2_surrogate=nsga2_surrogate,
-                nsga2_models=nsga2_models,
-                step=step + regenerate_attempts,
-            )
-            offspring_x = np.asarray(offspring_x, dtype=np.float32)
-            offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
-            offspring_sigma = build_offspring_sigma(
-                archive_x=archive_x,
                 archive_y=archive_y,
-                offspring_x=offspring_x,
-                surrogate=surrogate,
+                step=step + regenerate_attempts,
             )
 
             if policy_name.lower() == "db_saea":
@@ -609,7 +693,6 @@ def run_policy_rollout(
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f} | "
             f"strategy = {record.strategy_name} | regenerations = {record.regenerate_attempts}"
         )
-        surrogate = build_surrogate(args, archive_x, archive_y)
 
     final_front = pareto_front(archive_y)
     plot_path = None
@@ -923,6 +1006,9 @@ def main(agent_name: str = "db_saea") -> None:
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
         log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
         log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
+        log(f"hybrid_nsga = {int(bool(args.hybrid_nsga))}")
+        log(f"gp_nsga_steps = {resolve_surrogate_nsga_steps(args, 'gp')}")
+        log(f"tabpfn_nsga_steps = {resolve_surrogate_nsga_steps(args, 'tabpfn')}")
         log(f"lhs_sample_sec = {lhs_sample_sec:.3f}")
         log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
         compare_infill_name = resolve_compare_infill_name(args)

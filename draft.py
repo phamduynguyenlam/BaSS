@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from nsga2_solver import run_surrogate_nsga2
+from nsga3_solver import run_surrogate_nsga3
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume
@@ -30,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init_fe", type=int, default=80)
     parser.add_argument("--offspring_size", type=int, default=80)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=30)
+    parser.add_argument("--nsga3", action="store_true")
     parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "tabpfn"])
     parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--gp_nu", type=float, default=5.0)
@@ -96,6 +98,7 @@ def main() -> None:
         log(f"reference_point = {ref_point.astype(float).tolist()} | archive_hv = {archive_hv:.6f}")
         log(f"surrogate_model = {str(args.surrogate_model).lower()} | beta = {float(args.beta):.4f}")
         log(f"surrogate_nsga_steps = {int(args.surrogate_nsga_steps)}")
+        log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
 
         if str(args.surrogate_model).lower() == "tabpfn":
             base_surrogate = fit_tabpfn_surrogate(
@@ -109,7 +112,8 @@ def main() -> None:
             surrogate = build_surrogate(args, archive_x, archive_y)
         nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
 
-        offspring_x, offspring_pred = run_surrogate_nsga2(
+        solver = run_surrogate_nsga3 if bool(args.nsga3) else run_surrogate_nsga2
+        offspring_x, offspring_pred = solver(
             surrogate=nsga2_surrogate,
             gps=nsga2_models,
             problem=nsga2_problem,
