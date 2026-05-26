@@ -400,10 +400,10 @@ def generate_offspring_pool(
     archive_x: np.ndarray,
     archive_y: np.ndarray,
     step: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
     if not bool(getattr(args, "hybrid_nsga", False)):
         surrogate = build_surrogate(args, archive_x, archive_y)
-        return _generate_single_offspring_pool(
+        offspring_x, offspring_pred, offspring_sigma = _generate_single_offspring_pool(
             args=args,
             nsga_problem=nsga_problem,
             archive_x=archive_x,
@@ -412,6 +412,8 @@ def generate_offspring_pool(
             step=step,
             surrogate_name=surrogate_model_name(args),
         )
+        group_indices = [np.arange(int(offspring_x.shape[0]), dtype=np.int64)]
+        return offspring_x, offspring_pred, offspring_sigma, group_indices
 
     gp_surrogate = build_named_surrogate(args, archive_x, archive_y, "gp")
     tabpfn_surrogate = build_named_surrogate(args, archive_x, archive_y, "tabpfn")
@@ -433,11 +435,14 @@ def generate_offspring_pool(
         step=int(step) * 2 + 1,
         surrogate_name="tabpfn",
     )
-    return (
-        np.vstack([gp_x, tab_x]).astype(np.float32),
-        np.vstack([gp_pred, tab_pred]).astype(np.float32),
-        np.vstack([gp_sigma, tab_sigma]).astype(np.float32),
-    )
+    merged_x = np.vstack([gp_x, tab_x]).astype(np.float32)
+    merged_pred = np.vstack([gp_pred, tab_pred]).astype(np.float32)
+    merged_sigma = np.vstack([gp_sigma, tab_sigma]).astype(np.float32)
+    group_indices = [
+        np.arange(0, int(gp_x.shape[0]), dtype=np.int64),
+        np.arange(int(gp_x.shape[0]), int(gp_x.shape[0] + tab_x.shape[0]), dtype=np.int64),
+    ]
+    return merged_x, merged_pred, merged_sigma, group_indices
 
 
 def predict_surrogate_mean(surrogate: Any, x: np.ndarray) -> np.ndarray:
@@ -564,6 +569,28 @@ def select_offspring_index_pseudo_front_qmax(logits: torch.Tensor, surrogate_y: 
     return int(pseudo_idx[local_best]), q_values
 
 
+def select_offspring_index_grouped_pseudo_front_qmax(
+    logits: torch.Tensor,
+    surrogate_y: np.ndarray,
+    group_indices: list[np.ndarray],
+) -> tuple[int, np.ndarray]:
+    logits_1d = logits.reshape(-1)
+    q_values = logits_1d.detach().cpu().numpy().astype(np.float32)
+    keep_parts: list[np.ndarray] = []
+    for group in group_indices:
+        group_idx = np.asarray(group, dtype=np.int64).reshape(-1)
+        if group_idx.size <= 0:
+            continue
+        local_values = np.asarray(surrogate_y[group_idx], dtype=np.float32)
+        local_keep = get_pseudo_front_indices(local_values)
+        keep_parts.append(group_idx[local_keep])
+    if len(keep_parts) == 0:
+        raise ValueError("Grouped pseudo-front selection requires at least one offspring candidate.")
+    pseudo_idx = np.concatenate(keep_parts, axis=0).astype(np.int64, copy=False)
+    local_best = int(np.argmax(q_values[pseudo_idx]))
+    return int(pseudo_idx[local_best]), q_values
+
+
 @dataclass
 class StepRecord:
     step: int
@@ -608,7 +635,7 @@ def run_policy_rollout(
     logger(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
 
     for step in range(n_evo_steps):
-        offspring_x, offspring_pred, offspring_sigma = generate_offspring_pool(
+        offspring_x, offspring_pred, offspring_sigma, offspring_groups = generate_offspring_pool(
             args=args,
             nsga_problem=nsga2_problem,
             archive_x=archive_x,
@@ -635,7 +662,14 @@ def run_policy_rollout(
                 )
                 logits = out["logits"].reshape(-1)
             if bool(getattr(args, "pseudo_front_only", False)):
-                selected_idx, _ = select_offspring_index_pseudo_front_qmax(logits, offspring_pred)
+                if bool(getattr(args, "hybrid_nsga", False)):
+                    selected_idx, _ = select_offspring_index_grouped_pseudo_front_qmax(
+                        logits,
+                        offspring_pred,
+                        offspring_groups,
+                    )
+                else:
+                    selected_idx, _ = select_offspring_index_pseudo_front_qmax(logits, offspring_pred)
             else:
                 selected_idx, _ = select_offspring_index_epsilon_greedy(logits, epsilon=0.05)
         elif policy_name.lower() == "db_saea":
@@ -663,7 +697,7 @@ def run_policy_rollout(
                     strategy_action = 1 + int(torch.argmax(out["q_values"].reshape(-1)[1:]).item())
                 if strategy_action == 0:
                     regenerate_attempts += 1
-                    offspring_x, offspring_pred, offspring_sigma = generate_offspring_pool(
+                    offspring_x, offspring_pred, offspring_sigma, offspring_groups = generate_offspring_pool(
                         args=args,
                         nsga_problem=nsga2_problem,
                         archive_x=archive_x,
@@ -1064,6 +1098,7 @@ def main(agent_name: str = "disc") -> None:
             log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
             log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
             log(f"hybrid_nsga = {int(bool(args.hybrid_nsga))}")
+            log(f"surrogate_nsga_steps = {int(args.surrogate_nsga_steps)}")
             log(f"gp_nsga_steps = {resolve_surrogate_nsga_steps(args, 'gp')}")
             log(f"tabpfn_nsga_steps = {resolve_surrogate_nsga_steps(args, 'tabpfn')}")
             log(f"lhs_sample_sec = {lhs_sample_sec:.3f}")
@@ -1073,6 +1108,8 @@ def main(agent_name: str = "disc") -> None:
             log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
             log(f"compare_infill = {compare_infill_name if compare_infill_name is not None else '-'}")
             log(f"compare_algo = {compare_algo_name if compare_algo_name is not None else '-'}")
+            log(f"agent_pth = {str(args.agent_pth) if args.agent_pth is not None else '-'}")
+            log(f"compare_agent_pth = {str(args.compare_agent_pth) if getattr(args, 'compare_agent_pth', None) is not None else '-'}")
             log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
             log(f"model_to_device_sec = {float(agent_load_breakdown['model_to_device_sec']):.3f}")
             log(f"torch_load_sec = {float(agent_load_breakdown['torch_load_sec']):.3f}")
