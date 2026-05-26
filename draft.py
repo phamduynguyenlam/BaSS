@@ -95,6 +95,7 @@ def main() -> None:
         log(f"archive_x shape = {tuple(archive_x.shape)} | archive_y shape = {tuple(archive_y.shape)}")
         log(f"reference_point = {ref_point.astype(float).tolist()} | archive_hv = {archive_hv:.6f}")
         log(f"surrogate_model = {str(args.surrogate_model).lower()} | beta = {float(args.beta):.4f}")
+        log(f"surrogate_nsga_steps = {int(args.surrogate_nsga_steps)}")
 
         if str(args.surrogate_model).lower() == "tabpfn":
             base_surrogate = fit_tabpfn_surrogate(

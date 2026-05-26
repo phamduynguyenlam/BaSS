@@ -1,12 +1,18 @@
-test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz6_tabpfn_seed0_20260526_162259.txt
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz6_tabpfn_seed0_20260526_165213.txt
 reference_point = [16.8257999420166, 16.91939926147461, 17.76460075378418] (from ref_points_hv.py)
 candidate_solver = nsga2
 nsga_af = lcb | beta = 1.0000
 lhs_sample_sec = 0.000
+init_eval_sec = 0.000
+true_pareto_load_sec = 0.037
+true_pareto_hv_sec = 1010.651
 pseudo_front_only = 0
 compare_infill = -
 reward_scheme = rs1 | reward_lambda = 10.0000
-agent_load_sec = 1.375
+model_to_device_sec = 1.404
+torch_load_sec = 0.039
+load_state_dict_sec = 0.012
+agent_load_sec = 1.456
 iter 0 | front = 63 | HV = 0.711916
 iter 1 | front = 64 | HV = 0.826425 | reward = 1.754138
 iter 2 | front = 65 | HV = 0.826425 | reward = 1.538717

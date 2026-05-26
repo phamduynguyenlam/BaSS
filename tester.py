@@ -181,14 +181,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb"])
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--compare_infill", type=str, default=None)
+    parser.add_argument("--compare_algo", type=str, default=None, choices=["db_saea"])
+    parser.add_argument("--compare_agent_pth", type=str, default=None)
     parser.add_argument("--nsga3", action="store_true")
     parser.add_argument("--pseudo_front_only", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
     args = parser.parse_args()
 
     if int(args.max_fe) <= int(args.init_fe):
         raise ValueError(f"max_fe must be greater than init_fe, got {args.max_fe} and {args.init_fe}.")
+    if args.compare_infill is not None and args.compare_algo is not None:
+        raise ValueError("Use only one of --compare_infill or --compare_algo at a time.")
     return args
 
 
@@ -392,8 +397,9 @@ def build_disc(
     *,
     map_location: str,
     agent_name: str = "disc",
-) -> Disc:
+) -> tuple[Disc, dict[str, float]]:
     agent_cls = resolve_agent_cls(agent_name)
+    model_to_device_started_at = time.perf_counter()
     disc = agent_cls(
         hidden_dim=int(args.hidden_dim),
         n_heads=int(args.n_heads),
@@ -401,14 +407,26 @@ def build_disc(
         dropout=float(args.dropout),
         logit_scale=float(args.logit_scale),
     ).to(map_location)
+    model_to_device_sec = time.perf_counter() - model_to_device_started_at
     disc.eval()
 
-    if args.agent_pth and not bool(args.random_model):
-        state = torch.load(args.agent_pth, map_location=map_location)
-        state_dict = state["state_dict"] if isinstance(state, dict) and "state_dict" in state else state
-        disc.load_state_dict(state_dict, strict=True)
+    torch_load_sec = 0.0
+    load_state_dict_sec = 0.0
 
-    return disc
+    if args.agent_pth and not bool(args.random_model):
+        torch_load_started_at = time.perf_counter()
+        state = torch.load(args.agent_pth, map_location=map_location)
+        torch_load_sec = time.perf_counter() - torch_load_started_at
+        state_dict = state["state_dict"] if isinstance(state, dict) and "state_dict" in state else state
+        load_state_dict_started_at = time.perf_counter()
+        disc.load_state_dict(state_dict, strict=True)
+        load_state_dict_sec = time.perf_counter() - load_state_dict_started_at
+
+    return disc, {
+        "model_to_device_sec": float(model_to_device_sec),
+        "torch_load_sec": float(torch_load_sec),
+        "load_state_dict_sec": float(load_state_dict_sec),
+    }
 
 
 def select_offspring_index_epsilon_greedy(logits: torch.Tensor, epsilon: float = 0.05) -> tuple[int, np.ndarray]:
@@ -475,6 +493,7 @@ def run_policy_rollout(
     archive_y_init: np.ndarray,
     policy_name: str,
     disc: Any | None = None,
+    db_saea_agent: Any | None = None,
     infill_criterion: Any | None = None,
     compare_mode: bool = False,
     make_plot: bool = True,
@@ -535,6 +554,58 @@ def run_policy_rollout(
                 selected_idx, _ = select_offspring_index_pseudo_front_qmax(logits, offspring_pred)
             else:
                 selected_idx, _ = select_offspring_index_epsilon_greedy(logits, epsilon=0.05)
+        elif policy_name.lower() == "db_saea":
+            if db_saea_agent is None:
+                raise ValueError("DB-SAEA rollout requires a built db_saea model.")
+            max_regenerate_attempts = 5
+            regenerate_attempts = 0
+            while True:
+                progress = float(step) / float(max(n_evo_steps - 1, 1))
+                with torch.no_grad():
+                    out = db_saea_agent(
+                        x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
+                        y_true=torch.from_numpy(archive_y).to(device=args.device, dtype=torch.float32),
+                        x_sur=torch.from_numpy(offspring_x).to(device=args.device, dtype=torch.float32),
+                        y_sur=torch.from_numpy(offspring_pred).to(device=args.device, dtype=torch.float32),
+                        sigma_sur=torch.from_numpy(offspring_sigma).to(device=args.device, dtype=torch.float32),
+                        progress=progress,
+                        lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
+                        upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
+                        decode_type="epsilon_greedy",
+                        epsilon=0.05,
+                    )
+                strategy_action = int(out["action"].reshape(-1)[0].item())
+                if strategy_action == 0 and regenerate_attempts >= max_regenerate_attempts:
+                    strategy_action = 1 + int(torch.argmax(out["q_values"].reshape(-1)[1:]).item())
+                if strategy_action == 0:
+                    regenerate_attempts += 1
+                    offspring_x, offspring_pred = run_surrogate_optimizer(
+                        args=args,
+                        nsga_problem=nsga2_problem,
+                        archive_x=archive_x,
+                        nsga2_surrogate=nsga2_surrogate,
+                        nsga2_models=nsga2_models,
+                        step=step + regenerate_attempts,
+                    )
+                    offspring_x = np.asarray(offspring_x, dtype=np.float32)
+                    offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
+                    offspring_sigma = build_offspring_sigma(
+                        archive_x=archive_x,
+                        archive_y=archive_y,
+                        offspring_x=offspring_x,
+                        surrogate=surrogate,
+                    )
+                    continue
+                selected_idx, _ = db_saea_agent.select_candidate_from_action(
+                    action_idx=int(strategy_action),
+                    archive_y=archive_y,
+                    candidate_mean=offspring_pred,
+                    candidate_std=offspring_sigma,
+                    seed=int(args.seed) + step + regenerate_attempts,
+                )
+                if selected_idx is None:
+                    raise RuntimeError(f"DB-SAEA strategy action {strategy_action} did not produce a candidate index.")
+                break
         elif infill_criterion is not None:
             selected_idx, _ = infill_criterion.select_index(
                 archive_y=archive_y,
@@ -763,13 +834,14 @@ def plot_results(
 def plot_compare_results(
     *,
     args: argparse.Namespace,
-    disc_fe_history: list[int],
-    disc_hv_history: list[float],
-    disc_archive_y: np.ndarray,
-    infill_fe_history: list[int],
-    infill_hv_history: list[float],
-    infill_archive_y: np.ndarray,
-    infill_label: str,
+    primary_fe_history: list[int],
+    primary_hv_history: list[float],
+    primary_archive_y: np.ndarray,
+    baseline_fe_history: list[int],
+    baseline_hv_history: list[float],
+    baseline_archive_y: np.ndarray,
+    primary_label: str,
+    baseline_label: str,
     true_pareto: np.ndarray | None,
 ) -> str:
     agent_tag = str(getattr(args, "agent_name", "disc")).lower()
@@ -784,9 +856,9 @@ def plot_compare_results(
     plot_file = Path(plot_path)
     plot_file.parent.mkdir(parents=True, exist_ok=True)
 
-    disc_front = pareto_front(disc_archive_y)
-    infill_front = pareto_front(infill_archive_y)
-    n_obj = int(disc_archive_y.shape[1])
+    primary_front = pareto_front(primary_archive_y)
+    baseline_front = pareto_front(baseline_archive_y)
+    n_obj = int(primary_archive_y.shape[1])
 
     fig = plt.figure(figsize=(13, 5))
     ax_hv = fig.add_subplot(1, 2, 1)
@@ -795,8 +867,8 @@ def plot_compare_results(
     else:
         ax_pf = fig.add_subplot(1, 2, 2)
 
-    ax_hv.plot(disc_fe_history, disc_hv_history, marker="o", linewidth=1.8, markersize=4, label="DISC")
-    ax_hv.plot(infill_fe_history, infill_hv_history, marker="s", linewidth=1.8, markersize=4, label=infill_label)
+    ax_hv.plot(primary_fe_history, primary_hv_history, marker="o", linewidth=1.8, markersize=4, label=primary_label)
+    ax_hv.plot(baseline_fe_history, baseline_hv_history, marker="s", linewidth=1.8, markersize=4, label=baseline_label)
     ax_hv.set_xlabel("FE")
     ax_hv.set_ylabel("Hypervolume")
     ax_hv.set_title("HV Comparison")
@@ -804,10 +876,10 @@ def plot_compare_results(
     ax_hv.legend()
 
     if n_obj == 2:
-        ax_pf.scatter(disc_archive_y[:, 0], disc_archive_y[:, 1], s=14, alpha=0.22, label="DISC Archive")
-        ax_pf.scatter(infill_archive_y[:, 0], infill_archive_y[:, 1], s=14, alpha=0.22, label=f"{infill_label} Archive")
-        ax_pf.scatter(disc_front[:, 0], disc_front[:, 1], s=28, alpha=0.95, marker="o", label="DISC PF")
-        ax_pf.scatter(infill_front[:, 0], infill_front[:, 1], s=28, alpha=0.95, marker="x", label=f"{infill_label} PF")
+        ax_pf.scatter(primary_archive_y[:, 0], primary_archive_y[:, 1], s=14, alpha=0.22, label=f"{primary_label} Archive")
+        ax_pf.scatter(baseline_archive_y[:, 0], baseline_archive_y[:, 1], s=14, alpha=0.22, label=f"{baseline_label} Archive")
+        ax_pf.scatter(primary_front[:, 0], primary_front[:, 1], s=28, alpha=0.95, marker="o", label=f"{primary_label} PF")
+        ax_pf.scatter(baseline_front[:, 0], baseline_front[:, 1], s=28, alpha=0.95, marker="x", label=f"{baseline_label} PF")
         if true_pareto is not None and true_pareto.shape[1] >= 2:
             order = np.argsort(true_pareto[:, 0])
             ax_pf.plot(true_pareto[order, 0], true_pareto[order, 1], linewidth=2.0, label="True PF")
@@ -815,10 +887,10 @@ def plot_compare_results(
         ax_pf.set_ylabel("f2")
         ax_pf.grid(True, alpha=0.3)
     elif n_obj == 3:
-        ax_pf.scatter(disc_archive_y[:, 0], disc_archive_y[:, 1], disc_archive_y[:, 2], s=12, alpha=0.18, label="DISC Archive")
-        ax_pf.scatter(infill_archive_y[:, 0], infill_archive_y[:, 1], infill_archive_y[:, 2], s=12, alpha=0.18, label=f"{infill_label} Archive")
-        ax_pf.scatter(disc_front[:, 0], disc_front[:, 1], disc_front[:, 2], s=26, alpha=0.95, marker="o", label="DISC PF")
-        ax_pf.scatter(infill_front[:, 0], infill_front[:, 1], infill_front[:, 2], s=26, alpha=0.95, marker="x", label=f"{infill_label} PF")
+        ax_pf.scatter(primary_archive_y[:, 0], primary_archive_y[:, 1], primary_archive_y[:, 2], s=12, alpha=0.18, label=f"{primary_label} Archive")
+        ax_pf.scatter(baseline_archive_y[:, 0], baseline_archive_y[:, 1], baseline_archive_y[:, 2], s=12, alpha=0.18, label=f"{baseline_label} Archive")
+        ax_pf.scatter(primary_front[:, 0], primary_front[:, 1], primary_front[:, 2], s=26, alpha=0.95, marker="o", label=f"{primary_label} PF")
+        ax_pf.scatter(baseline_front[:, 0], baseline_front[:, 1], baseline_front[:, 2], s=26, alpha=0.95, marker="x", label=f"{baseline_label} PF")
         if true_pareto is not None and true_pareto.shape[1] >= 3:
             ax_pf.scatter(true_pareto[:, 0], true_pareto[:, 1], true_pareto[:, 2], s=8, alpha=0.20, label="True PF")
         ax_pf.set_xlabel("f1")
@@ -889,28 +961,45 @@ def main(agent_name: str = "disc") -> None:
             seed=int(args.seed),
         )
         lhs_sample_sec = time.perf_counter() - lhs_started_at
+        init_eval_started_at = time.perf_counter()
         archive_y = np.asarray(problem.evaluate(archive_x), dtype=np.float32)
+        init_eval_sec = time.perf_counter() - init_eval_started_at
         n_obj = int(archive_y.shape[1])
         ref_point = get_reference_point(args.problem, n_obj=n_obj)
         nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
+        true_pareto_load_started_at = time.perf_counter()
         true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
-        true_pareto_hv = None if true_pareto is None else float(hypervolume(true_pareto, ref_point))
-        log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
-        log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
-        log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
-        log(f"lhs_sample_sec = {lhs_sample_sec:.3f}")
-        log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
+        true_pareto_load_sec = time.perf_counter() - true_pareto_load_started_at
+        true_pareto_hv = None
+        true_pareto_hv_sec = 0.0
         compare_infill_name = resolve_compare_infill_name(args)
+        compare_algo_name = None if args.compare_algo is None else str(args.compare_algo).lower()
         compare_infill = None if compare_infill_name is None else build_compare_infill_criterion(compare_infill_name, ref_point=ref_point)
         compare_label = None if compare_infill_name is None else compare_infill_display_name(compare_infill_name)
-        log(f"compare_infill = {compare_infill_name if compare_infill_name is not None else '-'}")
-        log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
-        if int(reward_scheme_id) == 3 and true_pareto_hv is None:
-            raise RuntimeError(f"Could not compute true Pareto HV for reward scheme 3 on {args.problem}-{int(args.dim)}D.")
+        if int(reward_scheme_id) == 3:
+            raise RuntimeError(
+                "tester.py no longer computes true_pareto_hv online. "
+                "Use a precomputed true Pareto HV source before testing reward scheme 3."
+            )
         agent_load_started_at = time.perf_counter()
-        disc = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
+        disc, agent_load_breakdown = build_disc(args, map_location=str(args.device), agent_name=args.agent_name)
         agent_load_sec = time.perf_counter() - agent_load_started_at
-        log(f"agent_load_sec = {agent_load_sec:.3f}")
+        if bool(args.debug):
+            log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
+            log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
+            log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
+            log(f"lhs_sample_sec = {lhs_sample_sec:.3f}")
+            log(f"init_eval_sec = {init_eval_sec:.3f}")
+            log(f"true_pareto_load_sec = {true_pareto_load_sec:.3f}")
+            log(f"true_pareto_hv_sec = {true_pareto_hv_sec:.3f}")
+            log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
+            log(f"compare_infill = {compare_infill_name if compare_infill_name is not None else '-'}")
+            log(f"compare_algo = {compare_algo_name if compare_algo_name is not None else '-'}")
+            log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
+            log(f"model_to_device_sec = {float(agent_load_breakdown['model_to_device_sec']):.3f}")
+            log(f"torch_load_sec = {float(agent_load_breakdown['torch_load_sec']):.3f}")
+            log(f"load_state_dict_sec = {float(agent_load_breakdown['load_state_dict_sec']):.3f}")
+            log(f"agent_load_sec = {agent_load_sec:.3f}")
         disc_summary, disc_archive_y = run_policy_rollout(
             args=args,
             problem=problem,
@@ -946,13 +1035,14 @@ def main(agent_name: str = "disc") -> None:
             )
             compare_plot_path = plot_compare_results(
                 args=args,
-                disc_fe_history=list(disc_summary["fe_history"]),
-                disc_hv_history=list(disc_summary["hv_history"]),
-                disc_archive_y=disc_archive_y,
-                infill_fe_history=list(infill_summary["fe_history"]),
-                infill_hv_history=list(infill_summary["hv_history"]),
-                infill_archive_y=infill_archive_y,
-                infill_label=str(compare_label),
+                primary_fe_history=list(disc_summary["fe_history"]),
+                primary_hv_history=list(disc_summary["hv_history"]),
+                primary_archive_y=disc_archive_y,
+                baseline_fe_history=list(infill_summary["fe_history"]),
+                baseline_hv_history=list(infill_summary["hv_history"]),
+                baseline_archive_y=infill_archive_y,
+                primary_label="DISC",
+                baseline_label=str(compare_label),
                 true_pareto=true_pareto,
             )
             summary = {
@@ -965,6 +1055,54 @@ def main(agent_name: str = "disc") -> None:
                 "reward_scheme": int(reward_scheme_id),
                 "disc": disc_summary,
                 "infill": infill_summary,
+                "compare_plot_path": compare_plot_path,
+                "test_log_path": str(test_log_path.resolve()),
+            }
+        elif compare_algo_name is not None:
+            compare_args = argparse.Namespace(**vars(args))
+            compare_args.agent_pth = args.compare_agent_pth
+            compare_args.random_model = bool(args.random_model)
+            if compare_args.agent_pth is None and not bool(compare_args.random_model):
+                raise ValueError("compare_algo requires --compare_agent_pth unless --random_model is used.")
+            baseline_agent, _ = build_disc(compare_args, map_location=str(args.device), agent_name=str(compare_algo_name))
+            baseline_summary, baseline_archive_y = run_policy_rollout(
+                args=args,
+                problem=problem,
+                nsga2_problem=nsga2_problem,
+                ref_point=ref_point,
+                true_pareto=true_pareto,
+                archive_x_init=archive_x,
+                archive_y_init=archive_y,
+                policy_name=str(compare_algo_name),
+                db_saea_agent=baseline_agent if compare_algo_name == "db_saea" else None,
+                compare_mode=True,
+                make_plot=False,
+                logger=log,
+                reward_scheme_id=int(reward_scheme_id),
+                true_pareto_hv=true_pareto_hv,
+            )
+            compare_plot_path = plot_compare_results(
+                args=args,
+                primary_fe_history=list(disc_summary["fe_history"]),
+                primary_hv_history=list(disc_summary["hv_history"]),
+                primary_archive_y=disc_archive_y,
+                baseline_fe_history=list(baseline_summary["fe_history"]),
+                baseline_hv_history=list(baseline_summary["hv_history"]),
+                baseline_archive_y=baseline_archive_y,
+                primary_label="DISC",
+                baseline_label=str(compare_algo_name).upper(),
+                true_pareto=true_pareto,
+            )
+            summary = {
+                "problem": args.problem,
+                "dim": int(args.dim),
+                "seed": int(args.seed),
+                "surrogate_model": surrogate_model_name(args),
+                "agent_name": args.agent_name,
+                "compare_algo": compare_algo_name,
+                "reward_scheme": int(reward_scheme_id),
+                "disc": disc_summary,
+                "baseline": baseline_summary,
                 "compare_plot_path": compare_plot_path,
                 "test_log_path": str(test_log_path.resolve()),
             }
@@ -993,6 +1131,29 @@ def main(agent_name: str = "disc") -> None:
                         "compare_infill": compare_infill_name,
                         "disc_final_hv": summary["disc"]["final_hv"],
                         "infill_final_hv": summary["infill"]["final_hv"],
+                        "compare_plot_path": summary["compare_plot_path"],
+                        "test_log_path": summary["test_log_path"],
+                    },
+                    indent=2,
+                )
+            )
+        elif compare_algo_name is not None:
+            log(
+                f"mean reward ({n_evo_steps} steps) | "
+                f"DISC = {summary['disc']['mean_reward_40_steps']:.6f} | "
+                f"{str(compare_algo_name).upper()} = {summary['baseline']['mean_reward_40_steps']:.6f}"
+            )
+            log(
+                json.dumps(
+                    {
+                        "problem": summary["problem"],
+                        "dim": summary["dim"],
+                        "seed": summary["seed"],
+                        "surrogate_model": summary["surrogate_model"],
+                        "agent_name": summary["agent_name"],
+                        "compare_algo": compare_algo_name,
+                        "disc_final_hv": summary["disc"]["final_hv"],
+                        "baseline_final_hv": summary["baseline"]["final_hv"],
                         "compare_plot_path": summary["compare_plot_path"],
                         "test_log_path": summary["test_log_path"],
                     },

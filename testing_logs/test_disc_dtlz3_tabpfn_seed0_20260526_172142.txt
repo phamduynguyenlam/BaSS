@@ -1,0 +1,16 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz3_tabpfn_seed0_20260526_172142.txt
+reference_point = [2421.642578125, 1905.2767333984375, 2532.968994140625] (from ref_points_hv.py)
+candidate_solver = nsga2
+nsga_af = lcb | beta = 1.0000
+lhs_sample_sec = 0.000
+init_eval_sec = 0.000
+true_pareto_load_sec = 0.027
+true_pareto_hv_sec = 0.047
+pseudo_front_only = 0
+compare_infill = -
+reward_scheme = rs1 | reward_lambda = 10.0000
+model_to_device_sec = 1.257
+torch_load_sec = 0.013
+load_state_dict_sec = 0.004
+agent_load_sec = 1.274
+iter 0 | front = 41 | HV = 1663620495.794341
