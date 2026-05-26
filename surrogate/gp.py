@@ -8,7 +8,7 @@ from scipy.linalg import solve_triangular
 from scipy.optimize import minimize
 from scipy.spatial.distance import cdist
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import ConstantKernel, Matern, RBF
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, RBF, WhiteKernel
 from sklearn.utils.optimize import _check_optimize_result  # noqa: F401
 
 from surrogate.surrogate_model import SurrogateModel
@@ -228,6 +228,72 @@ class GPSurrogateModel(SurrogateModel):
         return out + 1e-6
 
 
+@dataclass
+class GP2SurrogateModel(SurrogateModel):
+    n_var: int
+    n_obj: int
+    seed: int = 0
+    gps: list[GaussianProcessRegressor] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        super().__init__()
+        self.n_var = int(self.n_var)
+        self.n_obj = int(self.n_obj)
+        self.seed = int(self.seed)
+        self.gps = []
+        for obj_id in range(self.n_obj):
+            kernel = (
+                ConstantKernel(constant_value=1.0, constant_value_bounds="fixed")
+                * RBF(length_scale=0.5, length_scale_bounds="fixed")
+                + WhiteKernel(noise_level=1e-5, noise_level_bounds="fixed")
+            )
+            model = GaussianProcessRegressor(
+                kernel=kernel,
+                alpha=1e-6,
+                normalize_y=True,
+                optimizer=None,
+                random_state=int(self.seed) + int(obj_id),
+            )
+            self.gps.append(model)
+
+    @property
+    def models(self) -> list[GaussianProcessRegressor]:
+        return self.gps
+
+    def fit(self, x: np.ndarray, y: np.ndarray) -> "GP2SurrogateModel":
+        x_arr = np.asarray(x, dtype=np.float64)
+        y_arr = np.asarray(y, dtype=np.float64)
+        if x_arr.ndim != 2:
+            raise ValueError(f"x must have shape (N, d), got shape={x_arr.shape}.")
+        if y_arr.ndim != 2:
+            raise ValueError(f"y must have shape (N, m), got shape={y_arr.shape}.")
+        if x_arr.shape[1] != self.n_var:
+            raise ValueError(f"x must have {self.n_var} variables, got {x_arr.shape[1]}.")
+        if y_arr.shape[1] != self.n_obj:
+            raise ValueError(f"y must have {self.n_obj} objectives, got {y_arr.shape[1]}.")
+
+        for obj_id, gp in enumerate(self.gps):
+            gp.fit(x_arr, y_arr[:, obj_id])
+        return self
+
+    def predict_mean(self, x: np.ndarray, device: str | None = None) -> np.ndarray:
+        del device
+        x_arr = np.asarray(x, dtype=np.float64)
+        mean_preds: list[np.ndarray] = []
+        for gp in self.gps:
+            mean = gp.predict(x_arr)
+            mean_preds.append(np.asarray(mean, dtype=np.float32).reshape(-1))
+        return np.stack(mean_preds, axis=1).astype(np.float32)
+
+    def predict_std(self, x: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x, dtype=np.float64)
+        std_preds: list[np.ndarray] = []
+        for gp in self.gps:
+            _, std = gp.predict(x_arr, return_std=True)
+            std_preds.append(np.asarray(std, dtype=np.float32).reshape(-1))
+        return np.stack(std_preds, axis=1).astype(np.float32) + 1e-6
+
+
 def fit_gp_surrogates(
     *,
     archive_x: np.ndarray,
@@ -242,13 +308,29 @@ def fit_gp_surrogates(
     return model.fit(x_arr, y_arr)
 
 
+def fit_gp2_surrogates(
+    *,
+    archive_x: np.ndarray,
+    archive_y: np.ndarray,
+    seed: int = 0,
+) -> GP2SurrogateModel:
+    x_arr = np.asarray(archive_x, dtype=np.float64)
+    y_arr = np.asarray(archive_y, dtype=np.float64)
+    model = GP2SurrogateModel(
+        n_var=int(x_arr.shape[1]),
+        n_obj=int(y_arr.shape[1]),
+        seed=int(seed),
+    )
+    return model.fit(x_arr, y_arr)
+
+
 def predict_with_gp_mean(
     models: GPSurrogateModel | Sequence[GaussianProcessRegressor],
     x: np.ndarray,
     device: str | None = None,
 ) -> np.ndarray:
     del device
-    if isinstance(models, GPSurrogateModel):
+    if isinstance(models, (GPSurrogateModel, GP2SurrogateModel)):
         return np.asarray(models.predict_mean(x), dtype=np.float32)
 
     x_arr = np.asarray(x, dtype=np.float64)
@@ -265,7 +347,7 @@ def predict_with_gp_std(
     device: str | None = None,
 ) -> np.ndarray:
     del device
-    if isinstance(models, GPSurrogateModel):
+    if isinstance(models, (GPSurrogateModel, GP2SurrogateModel)):
         return np.asarray(models.predict_std(x), dtype=np.float32)
 
     x_arr = np.asarray(x, dtype=np.float64)

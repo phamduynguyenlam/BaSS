@@ -33,6 +33,7 @@ from surrogate.surrogate_model import (
     _apply_balanced_softmax_probs,
     _get_tabpfn_ensemble_members,
     estimate_uncertainty,
+    fit_gp2_surrogates,
     fit_gp_surrogates,
     fit_kan_surrogates,
     fit_tabpfn_surrogate,
@@ -173,7 +174,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logit_scale", type=float, default=5.0)
     parser.add_argument("--agent_pth", type=str, default=None)
     parser.add_argument("--random_model", action="store_true")
-    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "gp2", "kan", "tabpfn"])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--kan_steps", type=int, default=25)
@@ -243,6 +244,13 @@ def build_surrogate(
             archive_y=archive_y,
             seed=int(args.seed),
             nu=float(getattr(args, "gp_nu", 5.0)),
+        )
+
+    if name == "gp2":
+        return fit_gp2_surrogates(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            seed=int(args.seed),
         )
 
     if name == "tabpfn":

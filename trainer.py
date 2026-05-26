@@ -22,6 +22,7 @@ from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
 from surrogate.surrogate_model import (
     estimate_uncertainty,
+    fit_gp2_surrogates,
     fit_gp_surrogates,
     fit_kan_surrogates,
     fit_tabpfn_surrogate,
@@ -57,6 +58,7 @@ class TrainConfig:
     logit_scale: float = 1.0
     surrogate_model: str = "kan"
     surrogate_nsga_steps: int = 100
+    hybrid_nsga: bool = False
     offspring_size: int = 80
     kan_steps: int = 25
     kan_hidden_width: int = 10
@@ -130,10 +132,11 @@ def parse_args():
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
-    parser.add_argument("--surrogate_model", type=str, default="kan", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="kan", choices=["gp", "gp2", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
+    parser.add_argument("--hybrid_nsga", action="store_true")
     parser.add_argument("--updates_per_epoch", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--rollout_device", type=str, default="cpu")
@@ -196,8 +199,8 @@ def latin_hypercube_sample(n_samples, dim, lower, upper, seed):
     return (lower_arr + lhs * (upper_arr - lower_arr)).astype(np.float32)
 
 
-def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y, existing_surrogate=None):
-    surrogate_name = str(cfg_dict.get("surrogate_model", "gp")).lower()
+def build_named_surrogate_from_cfg(cfg_dict, archive_x, archive_y, surrogate_name, existing_surrogate=None):
+    surrogate_name = str(surrogate_name).lower()
     surrogate_device = str(cfg_dict.get("surrogate_device", cfg_dict.get("device", "cpu")))
 
     if surrogate_name == "gp":
@@ -206,6 +209,13 @@ def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y, existing_surrogate=
             archive_y=np.asarray(archive_y, dtype=np.float32),
             seed=int(cfg_dict.get("seed", 0)),
             nu=float(cfg_dict.get("gp_nu", 5.0)),
+        )
+
+    if surrogate_name == "gp2":
+        return fit_gp2_surrogates(
+            archive_x=np.asarray(archive_x, dtype=np.float32),
+            archive_y=np.asarray(archive_y, dtype=np.float32),
+            seed=int(cfg_dict.get("seed", 0)),
         )
 
     if surrogate_name == "kan":
@@ -231,6 +241,17 @@ def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y, existing_surrogate=
         )
 
     raise ValueError(f"Unsupported surrogate_model: {surrogate_name}")
+
+
+def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y, existing_surrogate=None):
+    surrogate_name = str(cfg_dict.get("surrogate_model", "gp")).lower()
+    return build_named_surrogate_from_cfg(
+        cfg_dict,
+        archive_x,
+        archive_y,
+        surrogate_name,
+        existing_surrogate=existing_surrogate,
+    )
 
 
 def surrogate_or_models_for_nsga2(surrogate):
@@ -334,6 +355,68 @@ def build_offspring_sigma(archive_x, archive_y, offspring_x, surrogate):
     if local_sigma.shape[1] != archive_y.shape[1]:
         local_sigma = np.repeat(local_sigma.mean(axis=1, keepdims=True), archive_y.shape[1], axis=1)
     return local_sigma.astype(np.float32)
+
+
+def _generate_single_offspring_pool(cfg_dict, archive_x, archive_y, nsga2_problem, seed, surrogate_name):
+    surrogate = build_named_surrogate_from_cfg(
+        cfg_dict,
+        archive_x=archive_x,
+        archive_y=archive_y,
+        surrogate_name=surrogate_name,
+    )
+    nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
+    offspring_x, offspring_y = run_surrogate_nsga2(
+        gps=nsga2_models,
+        surrogate=nsga2_surrogate,
+        problem=nsga2_problem,
+        archive_x=archive_x,
+        pop_size=int(cfg_dict["offspring_size"]),
+        surrogate_nsga_steps=int(cfg_dict["surrogate_nsga_steps"]),
+        seed=int(seed),
+    )
+    offspring_x = np.asarray(offspring_x, dtype=np.float32)
+    offspring_y = np.asarray(offspring_y, dtype=np.float32)
+    offspring_sigma = build_offspring_sigma(
+        archive_x=archive_x,
+        archive_y=archive_y,
+        offspring_x=offspring_x,
+        surrogate=surrogate,
+    )
+    return surrogate, offspring_x, offspring_y, offspring_sigma
+
+
+def generate_offspring_pool(cfg_dict, archive_x, archive_y, nsga2_problem, seed):
+    if not bool(cfg_dict.get("hybrid_nsga", False)):
+        return _generate_single_offspring_pool(
+            cfg_dict,
+            archive_x=archive_x,
+            archive_y=archive_y,
+            nsga2_problem=nsga2_problem,
+            seed=seed,
+            surrogate_name=str(cfg_dict.get("surrogate_model", "gp")).lower(),
+        )
+
+    gp_surrogate, gp_x, gp_y, gp_sigma = _generate_single_offspring_pool(
+        cfg_dict,
+        archive_x=archive_x,
+        archive_y=archive_y,
+        nsga2_problem=nsga2_problem,
+        seed=int(seed) * 2,
+        surrogate_name="gp",
+    )
+    gp2_surrogate, gp2_x, gp2_y, gp2_sigma = _generate_single_offspring_pool(
+        cfg_dict,
+        archive_x=archive_x,
+        archive_y=archive_y,
+        nsga2_problem=nsga2_problem,
+        seed=int(seed) * 2 + 1,
+        surrogate_name="gp2",
+    )
+    merged_surrogate = {"gp": gp_surrogate, "gp2": gp2_surrogate}
+    merged_x = np.vstack([gp_x, gp2_x]).astype(np.float32)
+    merged_y = np.vstack([gp_y, gp2_y]).astype(np.float32)
+    merged_sigma = np.vstack([gp_sigma, gp2_sigma]).astype(np.float32)
+    return merged_surrogate, merged_x, merged_y, merged_sigma
 
 
 def pad_stack_rows(arrays, pad_value=0.0):
@@ -701,6 +784,10 @@ class DiscSAEAEnv:
         return cfg_local
 
     def _fit_surrogate(self):
+        if bool(self.cfg.get("hybrid_nsga", False)):
+            self.surrogate = None
+            self._surrogate_dirty = False
+            return None
         existing_surrogate = self.surrogate if self.cfg.get("surrogate_model", "gp") == "tabpfn" else None
         self.surrogate = build_surrogate_from_cfg(
             self._surrogate_cfg(),
@@ -712,30 +799,24 @@ class DiscSAEAEnv:
         return self.surrogate
 
     def _ensure_surrogate_ready(self):
+        if bool(self.cfg.get("hybrid_nsga", False)):
+            return None
         if self.surrogate is None or bool(self._surrogate_dirty):
             self._fit_surrogate()
         return self.surrogate
 
     def _refresh_offspring(self):
-        surrogate = self._ensure_surrogate_ready()
-        nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
-        offspring_x, offspring_y = run_surrogate_nsga2(
-            gps=nsga2_models,
-            surrogate=nsga2_surrogate,
-            problem=self.nsga2_problem,
-            archive_x=self.archive_x,
-            pop_size=int(self.cfg["offspring_size"]),
-            surrogate_nsga_steps=int(self.cfg["surrogate_nsga_steps"]),
-            seed=int(self.seed) + int(self.t),
-        )
-        self.offspring_x = np.asarray(offspring_x, dtype=np.float32)
-        self.offspring_y = np.asarray(offspring_y, dtype=np.float32)
-        self.offspring_sigma = build_offspring_sigma(
+        surrogate, offspring_x, offspring_y, offspring_sigma = generate_offspring_pool(
+            self._surrogate_cfg(),
             archive_x=self.archive_x,
             archive_y=self.archive_y,
-            offspring_x=self.offspring_x,
-            surrogate=surrogate,
+            nsga2_problem=self.nsga2_problem,
+            seed=int(self.seed) + int(self.t),
         )
+        self.surrogate = surrogate
+        self.offspring_x = np.asarray(offspring_x, dtype=np.float32)
+        self.offspring_y = np.asarray(offspring_y, dtype=np.float32)
+        self.offspring_sigma = np.asarray(offspring_sigma, dtype=np.float32)
 
     def _build_state(self):
         return {
@@ -983,6 +1064,7 @@ def train_disc_ddqn_ray(
     training_set=1,
     num_workers=None,
     surrogate_nsga_steps=100,
+    hybrid_nsga=False,
     updates_per_epoch=None,
     device=None,
     rollout_device="cpu",
@@ -1002,6 +1084,7 @@ def train_disc_ddqn_ray(
     cfg.training_set = int(training_set)
     cfg.heldout_problem = str(problem_name).upper()
     cfg.surrogate_nsga_steps = int(surrogate_nsga_steps)
+    cfg.hybrid_nsga = bool(hybrid_nsga)
     if updates_per_epoch is not None:
         cfg.updates_per_epoch = int(updates_per_epoch)
     if device is not None:
@@ -1012,10 +1095,10 @@ def train_disc_ddqn_ray(
     cfg.agent_pth = None if agent_pth is None else str(agent_pth)
     if num_workers is not None:
         cfg.num_workers = int(num_workers)
-    if cfg.surrogate_model not in {"gp", "kan", "tabpfn"}:
+    if cfg.surrogate_model not in {"gp", "gp2", "kan", "tabpfn"}:
         raise ValueError(
             f"Unsupported surrogate_model: {cfg.surrogate_model}. "
-            "Expected one of {'gp', 'kan', 'tabpfn'}."
+            "Expected one of {'gp', 'gp2', 'kan', 'tabpfn'}."
         )
     env_specs = build_training_env_specs(cfg.heldout_problem, cfg.training_set)
     if int(cfg.num_workers) <= 0:
@@ -1104,6 +1187,7 @@ def train_disc_ddqn_ray(
         f"sampling_backend={'ray' if use_ray else 'process_pool'} | "
         f"epochs={cfg.train_iters} | "
         f"sur_steps={cfg.surrogate_nsga_steps} | "
+        f"hybrid_nsga={int(bool(cfg.hybrid_nsga))} | "
         f"updates_per_epoch={cfg.updates_per_epoch} | "
         f"train_device={cfg.device} | "
         f"rollout_device={cfg.rollout_device} | "
@@ -1405,6 +1489,7 @@ if __name__ == "__main__":
         training_set=int(args.training_set),
         num_workers=args.num_workers,
         surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+        hybrid_nsga=bool(args.hybrid_nsga),
         updates_per_epoch=args.updates_per_epoch,
         device=args.device,
         rollout_device=str(args.rollout_device),

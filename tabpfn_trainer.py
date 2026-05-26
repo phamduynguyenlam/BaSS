@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
-    parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "gp2", "kan", "tabpfn"])
     parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
@@ -751,10 +751,10 @@ def train_disc_ddqn_tabpfn(
         cfg.device = str(device)
     cfg.rollout_device = str(rollout_device)
     cfg.surrogate_device = str(surrogate_device)
-    if cfg.surrogate_model not in {"gp", "kan", "tabpfn"}:
+    if cfg.surrogate_model not in {"gp", "gp2", "kan", "tabpfn"}:
         raise ValueError(
             f"Unsupported surrogate_model: {cfg.surrogate_model}. "
-            "Expected one of {'gp', 'kan', 'tabpfn'}."
+            "Expected one of {'gp', 'gp2', 'kan', 'tabpfn'}."
         )
 
     env_specs = build_training_env_specs(cfg.heldout_problem, cfg.training_set)

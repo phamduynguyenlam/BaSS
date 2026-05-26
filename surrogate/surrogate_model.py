@@ -1196,11 +1196,12 @@ def predict_multi_context(
     )
 
 
-from surrogate.gp import GPSurrogateModel, fit_gp_surrogates, predict_with_gp_mean, predict_with_gp_std
+from surrogate.gp import GP2SurrogateModel, GPSurrogateModel, fit_gp2_surrogates, fit_gp_surrogates, predict_with_gp_mean, predict_with_gp_std
 
 
 # Backwards/ergonomic aliases (requested names)
 surrogate_model = SurrogateModel
 gp = GPSurrogateModel
+gp2 = GP2SurrogateModel
 kan = KANSurrogateModel
 tabpfn = TabPFNSurrogateModel

@@ -30,6 +30,7 @@ from ref_points_hv import get_reference_point, get_true_pareto_hv
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
 from surrogate.surrogate_model import (
     estimate_uncertainty,
+    fit_gp2_surrogates,
     fit_gp_surrogates,
     fit_kan_surrogates,
     fit_tabpfn_surrogate,
@@ -171,7 +172,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logit_scale", type=float, default=5.0)
     parser.add_argument("--agent_pth", type=str, default=None)
     parser.add_argument("--random_model", action="store_true")
-    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "gp2", "kan", "tabpfn"])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--kan_steps", type=int, default=25)
     parser.add_argument("--kan_hidden_width", type=int, default=10)
@@ -251,6 +252,13 @@ def build_named_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archi
             archive_y=archive_y,
             seed=int(args.seed),
             nu=float(getattr(args, "gp_nu", 5.0)),
+        )
+
+    if surrogate_name == "gp2":
+        return fit_gp2_surrogates(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            seed=int(args.seed),
         )
 
     if surrogate_name == "tabpfn":
