@@ -13,7 +13,14 @@ import numpy as np
 import torch
 
 from agents.db_saea import DBSAEAAgent
-from infill import ExpectedHypervolumeImprovement
+from infill import (
+    EPDIExploitation,
+    EPDIExploration,
+    ExpectedHypervolumeImprovement,
+    NDA,
+    NDPBIConvergence,
+    NDPBIDiversity,
+)
 from nsga2_solver import run_surrogate_nsga2
 from nsga3_solver import run_surrogate_nsga3
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
@@ -44,12 +51,53 @@ def make_test_logger(log_path: Path):
 
 def default_test_log_path(args: argparse.Namespace, *, agent_name: str) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    compare_tag = "_compare" if bool(getattr(args, "compare_ehvi", False)) else ""
+    compare_name = resolve_compare_infill_name(args)
+    compare_tag = "" if compare_name is None else f"_compare_{compare_name}"
     stem = (
         f"test_{str(agent_name).lower()}_{str(args.problem).lower()}_"
         f"{str(args.surrogate_model).lower()}_seed{int(args.seed)}{compare_tag}_{timestamp}.txt"
     )
     return Path("testing_logs") / stem
+
+
+def resolve_compare_infill_name(args: argparse.Namespace) -> str | None:
+    raw_value = getattr(args, "compare_infill", None)
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip().lower()
+    if text == "":
+        return None
+    return text.replace("-", "_")
+
+
+def compare_infill_display_name(name: str) -> str:
+    display_map = {
+        "ehvi": "EHVI",
+        "nd_a": "ND-A",
+        "nd_pbi_convergence": "ND-PBI-Convergence",
+        "nd_pbi_diversity": "ND-PBI-Diversity",
+        "epdi_exploitation": "EPDI-Exploitation",
+        "epdi_exploration": "EPDI-Exploration",
+    }
+    key = str(name).strip().lower().replace("-", "_")
+    return display_map.get(key, key.upper())
+
+
+def build_compare_infill_criterion(name: str, *, ref_point: np.ndarray):
+    key = str(name).strip().lower().replace("-", "_")
+    if key == "ehvi":
+        return ExpectedHypervolumeImprovement(ref_point=ref_point, n_samples=64)
+    if key == "nd_a":
+        return NDA()
+    if key == "nd_pbi_convergence":
+        return NDPBIConvergence()
+    if key == "nd_pbi_diversity":
+        return NDPBIDiversity()
+    if key == "epdi_exploitation":
+        return EPDIExploitation()
+    if key == "epdi_exploration":
+        return EPDIExploration()
+    raise ValueError(f"Unsupported compare_infill: {name}")
 
 
 def resolve_test_reward_scheme(args: argparse.Namespace) -> int:
@@ -128,7 +176,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n_heads", type=int, default=1)
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
-    parser.add_argument("--compare_ehvi", action="store_true")
+    parser.add_argument("--compare_infill", type=str, default=None)
     parser.add_argument("--nsga3", action="store_true")
     parser.add_argument("--pseudo_front_only", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
@@ -388,7 +436,7 @@ def run_policy_rollout(
     archive_y_init: np.ndarray,
     policy_name: str,
     db_saea_agent: Any | None = None,
-    infill_criterion: ExpectedHypervolumeImprovement | None = None,
+    infill_criterion: Any | None = None,
     compare_mode: bool = False,
     make_plot: bool = True,
     logger=print,
@@ -465,11 +513,9 @@ def run_policy_rollout(
                 if selected_idx is None:
                     raise RuntimeError(f"DB-SAEA strategy action {strategy_action} did not produce a candidate index.")
                 break
-            elif policy_name.lower() == "ehvi":
-                if infill_criterion is None:
-                    raise ValueError("EHVI rollout requires an infill criterion.")
+            elif infill_criterion is not None:
                 strategy_action = -1
-                strategy_name = "ehvi"
+                strategy_name = str(policy_name).lower()
                 selected_idx, _ = infill_criterion.select_index(
                     archive_y=archive_y,
                     candidate_mean=offspring_pred,
@@ -480,9 +526,8 @@ def run_policy_rollout(
             else:
                 raise ValueError(f"Unsupported policy_name: {policy_name}")
 
-        if policy_name.lower() == "ehvi":
-            if infill_criterion is None:
-                raise ValueError("EHVI rollout requires an infill criterion.")
+        if policy_name.lower() != "db_saea" and infill_criterion is None:
+            raise ValueError(f"{policy_name} rollout requires an infill criterion.")
 
         selected_x = offspring_x[selected_idx : selected_idx + 1]
         selected_pred = offspring_pred[selected_idx]
@@ -709,9 +754,10 @@ def plot_compare_results(
     db_saea_fe_history: list[int],
     db_saea_hv_history: list[float],
     db_saea_archive_y: np.ndarray,
-    ehvi_fe_history: list[int],
-    ehvi_hv_history: list[float],
-    ehvi_archive_y: np.ndarray,
+    infill_fe_history: list[int],
+    infill_hv_history: list[float],
+    infill_archive_y: np.ndarray,
+    infill_label: str,
     true_pareto: np.ndarray | None,
 ) -> str:
     agent_tag = str(getattr(args, "agent_name", "db_saea")).lower()
@@ -727,7 +773,7 @@ def plot_compare_results(
     plot_file.parent.mkdir(parents=True, exist_ok=True)
 
     db_saea_front = pareto_front(db_saea_archive_y)
-    ehvi_front = pareto_front(ehvi_archive_y)
+    infill_front = pareto_front(infill_archive_y)
     n_obj = int(db_saea_archive_y.shape[1])
 
     fig = plt.figure(figsize=(13, 5))
@@ -738,7 +784,7 @@ def plot_compare_results(
         ax_pf = fig.add_subplot(1, 2, 2)
 
     ax_hv.plot(db_saea_fe_history, db_saea_hv_history, marker="o", linewidth=1.8, markersize=4, label="DB-SAEA")
-    ax_hv.plot(ehvi_fe_history, ehvi_hv_history, marker="s", linewidth=1.8, markersize=4, label="EHVI")
+    ax_hv.plot(infill_fe_history, infill_hv_history, marker="s", linewidth=1.8, markersize=4, label=infill_label)
     ax_hv.set_xlabel("FE")
     ax_hv.set_ylabel("Hypervolume")
     ax_hv.set_title("HV Comparison")
@@ -747,9 +793,9 @@ def plot_compare_results(
 
     if n_obj == 2:
         ax_pf.scatter(db_saea_archive_y[:, 0], db_saea_archive_y[:, 1], s=14, alpha=0.22, label="DB-SAEA Archive")
-        ax_pf.scatter(ehvi_archive_y[:, 0], ehvi_archive_y[:, 1], s=14, alpha=0.22, label="EHVI Archive")
+        ax_pf.scatter(infill_archive_y[:, 0], infill_archive_y[:, 1], s=14, alpha=0.22, label=f"{infill_label} Archive")
         ax_pf.scatter(db_saea_front[:, 0], db_saea_front[:, 1], s=28, alpha=0.95, marker="o", label="DB-SAEA PF")
-        ax_pf.scatter(ehvi_front[:, 0], ehvi_front[:, 1], s=28, alpha=0.95, marker="x", label="EHVI PF")
+        ax_pf.scatter(infill_front[:, 0], infill_front[:, 1], s=28, alpha=0.95, marker="x", label=f"{infill_label} PF")
         if true_pareto is not None and true_pareto.shape[1] >= 2:
             order = np.argsort(true_pareto[:, 0])
             ax_pf.plot(true_pareto[order, 0], true_pareto[order, 1], linewidth=2.0, label="True PF")
@@ -758,9 +804,9 @@ def plot_compare_results(
         ax_pf.grid(True, alpha=0.3)
     elif n_obj == 3:
         ax_pf.scatter(db_saea_archive_y[:, 0], db_saea_archive_y[:, 1], db_saea_archive_y[:, 2], s=12, alpha=0.18, label="DB-SAEA Archive")
-        ax_pf.scatter(ehvi_archive_y[:, 0], ehvi_archive_y[:, 1], ehvi_archive_y[:, 2], s=12, alpha=0.18, label="EHVI Archive")
+        ax_pf.scatter(infill_archive_y[:, 0], infill_archive_y[:, 1], infill_archive_y[:, 2], s=12, alpha=0.18, label=f"{infill_label} Archive")
         ax_pf.scatter(db_saea_front[:, 0], db_saea_front[:, 1], db_saea_front[:, 2], s=26, alpha=0.95, marker="o", label="DB-SAEA PF")
-        ax_pf.scatter(ehvi_front[:, 0], ehvi_front[:, 1], ehvi_front[:, 2], s=26, alpha=0.95, marker="x", label="EHVI PF")
+        ax_pf.scatter(infill_front[:, 0], infill_front[:, 1], infill_front[:, 2], s=26, alpha=0.95, marker="x", label=f"{infill_label} PF")
         if true_pareto is not None and true_pareto.shape[1] >= 3:
             ax_pf.scatter(true_pareto[:, 0], true_pareto[:, 1], true_pareto[:, 2], s=8, alpha=0.20, label="True PF")
         ax_pf.set_xlabel("f1")
@@ -838,6 +884,10 @@ def main(agent_name: str = "db_saea") -> None:
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
         log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
         log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
+        compare_infill_name = resolve_compare_infill_name(args)
+        compare_infill = None if compare_infill_name is None else build_compare_infill_criterion(compare_infill_name, ref_point=ref_point)
+        compare_label = None if compare_infill_name is None else compare_infill_display_name(compare_infill_name)
+        log(f"compare_infill = {compare_infill_name if compare_infill_name is not None else '-'}")
         log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
         if int(reward_scheme_id) == 3 and true_pareto_hv is None:
             raise RuntimeError(f"Could not compute true Pareto HV for reward scheme 3 on {args.problem}-{int(args.dim)}D.")
@@ -852,14 +902,14 @@ def main(agent_name: str = "db_saea") -> None:
             archive_y_init=archive_y,
             policy_name="db_saea",
             db_saea_agent=db_saea_agent,
-            compare_mode=bool(args.compare_ehvi),
-            make_plot=not bool(args.compare_ehvi),
+            compare_mode=bool(compare_infill_name),
+            make_plot=not bool(compare_infill_name),
             logger=log,
             reward_scheme_id=int(reward_scheme_id),
             true_pareto_hv=true_pareto_hv,
         )
-        if bool(args.compare_ehvi):
-            ehvi_summary, ehvi_archive_y = run_policy_rollout(
+        if compare_infill_name is not None:
+            infill_summary, infill_archive_y = run_policy_rollout(
                 args=args,
                 problem=problem,
                 nsga2_problem=nsga2_problem,
@@ -867,8 +917,8 @@ def main(agent_name: str = "db_saea") -> None:
                 true_pareto=true_pareto,
                 archive_x_init=archive_x,
                 archive_y_init=archive_y,
-                policy_name="ehvi",
-                infill_criterion=ExpectedHypervolumeImprovement(ref_point=ref_point, n_samples=64),
+                policy_name=str(compare_infill_name),
+                infill_criterion=compare_infill,
                 compare_mode=True,
                 make_plot=False,
                 logger=log,
@@ -880,9 +930,10 @@ def main(agent_name: str = "db_saea") -> None:
                 db_saea_fe_history=list(db_saea_summary["fe_history"]),
                 db_saea_hv_history=list(db_saea_summary["hv_history"]),
                 db_saea_archive_y=db_saea_archive_y,
-                ehvi_fe_history=list(ehvi_summary["fe_history"]),
-                ehvi_hv_history=list(ehvi_summary["hv_history"]),
-                ehvi_archive_y=ehvi_archive_y,
+                infill_fe_history=list(infill_summary["fe_history"]),
+                infill_hv_history=list(infill_summary["hv_history"]),
+                infill_archive_y=infill_archive_y,
+                infill_label=str(compare_label),
                 true_pareto=true_pareto,
             )
             summary = {
@@ -891,10 +942,10 @@ def main(agent_name: str = "db_saea") -> None:
                 "seed": int(args.seed),
                 "surrogate_model": surrogate_model_name(args),
                 "agent_name": args.agent_name,
-                "compare_ehvi": True,
+                "compare_infill": compare_infill_name,
                 "reward_scheme": int(reward_scheme_id),
                 "db_saea": db_saea_summary,
-                "ehvi": ehvi_summary,
+                "infill": infill_summary,
                 "compare_plot_path": compare_plot_path,
                 "test_log_path": str(test_log_path.resolve()),
             }
@@ -906,11 +957,11 @@ def main(agent_name: str = "db_saea") -> None:
             out_path = Path(args.output_json)
             out_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-        if bool(args.compare_ehvi):
+        if compare_infill_name is not None:
             log(
                 f"mean reward ({n_evo_steps} steps) | "
                 f"DB-SAEA = {summary['db_saea']['mean_reward_40_steps']:.6f} | "
-                f"EHVI = {summary['ehvi']['mean_reward_40_steps']:.6f}"
+                f"{compare_label} = {summary['infill']['mean_reward_40_steps']:.6f}"
             )
             log(
                 json.dumps(
@@ -920,9 +971,9 @@ def main(agent_name: str = "db_saea") -> None:
                         "seed": summary["seed"],
                         "surrogate_model": summary["surrogate_model"],
                         "agent_name": summary["agent_name"],
-                        "compare_ehvi": True,
+                        "compare_infill": compare_infill_name,
                         "db_saea_final_hv": summary["db_saea"]["final_hv"],
-                        "ehvi_final_hv": summary["ehvi"]["final_hv"],
+                        "infill_final_hv": summary["infill"]["final_hv"],
                         "compare_plot_path": summary["compare_plot_path"],
                         "test_log_path": summary["test_log_path"],
                     },

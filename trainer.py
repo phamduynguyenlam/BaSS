@@ -807,6 +807,8 @@ class DiscSAEAEnv:
 
 
 def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, epsilon):
+    task_started_at = time.perf_counter()
+    worker_pid = os.getpid()
     device = str(cfg_dict.get("rollout_device", "cpu"))
     agent_cls = resolve_agent_cls(cfg_dict.get("agent_name", "disc"))
     agent = agent_cls(
@@ -874,6 +876,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
         total_reward += reward
         state = next_state
 
+    task_finished_at = time.perf_counter()
     return {
         "transitions": transitions,
         "episode_reward": float(total_reward),
@@ -881,6 +884,10 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
         "env_key": env_key(problem_name, dim),
         "init_hv": init_hv,
         "final_hv": float(env.current_hv()),
+        "worker_pid": int(worker_pid),
+        "task_started_at": float(task_started_at),
+        "task_finished_at": float(task_finished_at),
+        "task_duration_sec": float(task_finished_at - task_started_at),
     }
 
 
@@ -893,6 +900,29 @@ def rollout_episode_task_local(state_dict_cpu, cfg_dict, problem_name, dim, seed
         seed=seed,
         epsilon=epsilon,
     )
+
+
+def summarize_parallel_rollout(results):
+    if not results:
+        return None
+    started = np.asarray([float(r["task_started_at"]) for r in results], dtype=np.float64)
+    finished = np.asarray([float(r["task_finished_at"]) for r in results], dtype=np.float64)
+    durations = np.asarray([float(r["task_duration_sec"]) for r in results], dtype=np.float64)
+    pids = [int(r["worker_pid"]) for r in results]
+    overlap_wall_sec = float(max(finished.max() - started.min(), 0.0))
+    sum_task_sec = float(durations.sum())
+    parallelism = float(sum_task_sec / max(overlap_wall_sec, 1e-12))
+    return {
+        "tasks": int(len(results)),
+        "unique_pids": int(len(set(pids))),
+        "pid_list": sorted(set(pids)),
+        "overlap_wall_sec": overlap_wall_sec,
+        "sum_task_sec": sum_task_sec,
+        "mean_task_sec": float(durations.mean()),
+        "min_task_sec": float(durations.min()),
+        "max_task_sec": float(durations.max()),
+        "parallelism_est": parallelism,
+    }
 
 
 def save_training_checkpoint(
@@ -1141,6 +1171,20 @@ def train_disc_ddqn_ray(
             results = ray_mod.get(futures)
         else:
             results = [f.result() for f in futures]
+        parallel_stats = summarize_parallel_rollout(results)
+        if parallel_stats is not None:
+            log(
+                f"[Epoch {epoch:04d}] interact parallel | "
+                f"tasks={parallel_stats['tasks']} | "
+                f"unique_pids={parallel_stats['unique_pids']} | "
+                f"pid_list={parallel_stats['pid_list']} | "
+                f"overlap_wall_sec={parallel_stats['overlap_wall_sec']:.3f} | "
+                f"sum_task_sec={parallel_stats['sum_task_sec']:.3f} | "
+                f"mean_task_sec={parallel_stats['mean_task_sec']:.3f} | "
+                f"min_task_sec={parallel_stats['min_task_sec']:.3f} | "
+                f"max_task_sec={parallel_stats['max_task_sec']:.3f} | "
+                f"parallelism_est={parallel_stats['parallelism_est']:.2f}"
+            )
 
         per_env_stats = {}
         for result in results:
