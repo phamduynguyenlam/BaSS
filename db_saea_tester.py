@@ -176,6 +176,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n_heads", type=int, default=1)
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb"])
+    parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--compare_infill", type=str, default=None)
     parser.add_argument("--nsga3", action="store_true")
     parser.add_argument("--pseudo_front_only", action="store_true")
@@ -264,6 +266,37 @@ def surrogate_or_models_for_nsga2(surrogate: Any) -> tuple[Any | None, list[Any]
     if isinstance(models, list) and len(models) > 0:
         return None, models
     return surrogate, None
+
+
+class _LCBObjectiveWrapper:
+    def __init__(self, base_surrogate: Any, beta: float):
+        self.base_surrogate = base_surrogate
+        self.beta = float(beta)
+
+    def predict_mean(self, x: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x, dtype=np.float32)
+        mean = np.asarray(self.base_surrogate.predict_mean(x_arr), dtype=np.float32)
+        try:
+            std = np.asarray(self.base_surrogate.predict_std(x_arr), dtype=np.float32)
+        except Exception:
+            std = np.zeros_like(mean, dtype=np.float32)
+        if std.ndim == 1:
+            std = std.reshape(-1, 1)
+        if std.shape != mean.shape:
+            if std.shape[1] == 1:
+                std = np.repeat(std, mean.shape[1], axis=1)
+            else:
+                std = np.zeros_like(mean, dtype=np.float32)
+        return (mean - self.beta * std).astype(np.float32)
+
+    def predict(self, x: np.ndarray) -> np.ndarray:
+        return self.predict_mean(x)
+
+
+def prepare_nsga_surrogate(args: argparse.Namespace, surrogate: Any) -> tuple[Any | None, list[Any] | None]:
+    if str(getattr(args, "nsga_af", "mean")).lower() == "lcb":
+        return _LCBObjectiveWrapper(surrogate, beta=float(getattr(args, "beta", 1.0))), None
+    return surrogate_or_models_for_nsga2(surrogate)
 
 
 def make_nsga2_problem_adapter(problem, n_obj: int):
@@ -461,7 +494,7 @@ def run_policy_rollout(
         strategy_action = -1
         strategy_name = "-"
         while True:
-            nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
+            nsga2_surrogate, nsga2_models = prepare_nsga_surrogate(args, surrogate)
             offspring_x, offspring_pred = run_surrogate_optimizer(
                 args=args,
                 nsga_problem=nsga2_problem,
@@ -883,6 +916,7 @@ def main(agent_name: str = "db_saea") -> None:
         true_pareto_hv = None if true_pareto is None else float(hypervolume(true_pareto, ref_point))
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
         log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
+        log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
         log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
         compare_infill_name = resolve_compare_infill_name(args)
         compare_infill = None if compare_infill_name is None else build_compare_infill_criterion(compare_infill_name, ref_point=ref_point)
