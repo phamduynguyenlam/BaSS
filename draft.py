@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from nsga2_solver import run_surrogate_nsga2
-from problem.problem import make_problem
+from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume
 from surrogate.surrogate_model import fit_tabpfn_surrogate
@@ -21,8 +21,9 @@ from tester import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sample 80 LHS points on DTLZ6, fit a TabPFN surrogate, run NSGA-II on the surrogate, and print each offspring's true and predicted objective values."
+        description="Sample 80 LHS points, fit a surrogate, run NSGA-II on the surrogate, and print each offspring's true and predicted objective values."
     )
+    parser.add_argument("--problem", type=str, default="DTLZ6", choices=SUPPORTED_PROBLEMS)
     parser.add_argument("--dim", type=int, default=30)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cpu")
@@ -54,7 +55,7 @@ def make_logger(args: argparse.Namespace):
     log_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = log_dir / (
-        f"draft_{str(args.surrogate_model).lower()}_dtlz6_"
+        f"draft_{str(args.surrogate_model).lower()}_{str(args.problem).lower()}_"
         f"d{int(args.dim)}_seed{int(args.seed)}_{timestamp}.txt"
     )
     log_fp = log_path.open("w", encoding="utf-8")
@@ -74,7 +75,7 @@ def main() -> None:
     log, log_fp, log_path = make_logger(args)
 
     try:
-        problem_name = "DTLZ6"
+        problem_name = str(args.problem)
         problem = make_problem(problem_name, dim=int(args.dim))
         archive_x = latin_hypercube_sample(
             n_samples=int(args.init_fe),
