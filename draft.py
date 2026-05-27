@@ -8,6 +8,7 @@ import numpy as np
 
 from solver.nsga2_solver import run_surrogate_nsga2
 from solver.nsga3_solver import run_surrogate_nsga3
+from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume
@@ -31,12 +32,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init_fe", type=int, default=80)
     parser.add_argument("--offspring_size", type=int, default=80)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=30)
-    parser.add_argument("--nsga3", action="store_true")
+    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "usemo"])
     parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "gp2", "tabpfn"])
     parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--gp_nu", type=float, default=5.0)
     parser.add_argument("--beta", type=float, default=0.1)
-    return parser.parse_args()
+    parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb", "ei"])
+    args = parser.parse_args()
+    if str(args.solver).lower() == "usemo" and str(args.nsga_af).lower() not in {"lcb", "ei"}:
+        args.nsga_af = "ei"
+    return args
 
 
 class LowerConfidenceBoundSurrogate:
@@ -97,43 +102,66 @@ def main() -> None:
         log(f"archive_x shape = {tuple(archive_x.shape)} | archive_y shape = {tuple(archive_y.shape)}")
         log(f"reference_point = {ref_point.astype(float).tolist()} | archive_hv = {archive_hv:.6f}")
         log(f"surrogate_model = {str(args.surrogate_model).lower()} | beta = {float(args.beta):.4f}")
+        log(f"nsga_af = {str(args.nsga_af).lower()}")
         log(f"surrogate_nsga_steps = {int(args.surrogate_nsga_steps)}")
-        log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
+        log(f"candidate_solver = {str(args.solver).lower()}")
 
-        if str(args.surrogate_model).lower() == "tabpfn":
-            base_surrogate = fit_tabpfn_surrogate(
+        solver_name = str(args.solver).lower()
+        if solver_name == "usemo":
+            offspring_x, offspring_pred, offspring_sigma = run_surrogate_usemo(
+                problem=nsga2_problem,
                 archive_x=archive_x,
                 archive_y=archive_y,
-                device=str(args.device),
-                n_estimators=int(args.ensemble_model),
+                pop_size=int(args.offspring_size),
+                surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+                seed=int(args.seed),
+                acquisition=str(args.nsga_af).lower(),
+                beta=float(args.beta),
             )
-            surrogate = LowerConfidenceBoundSurrogate(base_surrogate, beta=float(args.beta))
-        else:
-            surrogate = build_surrogate(args, archive_x, archive_y)
-        nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
-
-        solver = run_surrogate_nsga3 if bool(args.nsga3) else run_surrogate_nsga2
-        offspring_x, offspring_pred = solver(
-            surrogate=nsga2_surrogate,
-            gps=nsga2_models,
-            problem=nsga2_problem,
-            archive_x=archive_x,
-            pop_size=int(args.offspring_size),
-            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
-            seed=int(args.seed),
-        )
-        offspring_x = np.asarray(offspring_x, dtype=np.float32)
-        offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
-        true_offspring_y = np.asarray(problem.evaluate(offspring_x), dtype=np.float32)
-        if str(args.surrogate_model).lower() == "tabpfn":
-            pred_mean, pred_std = base_surrogate.predict_mean_std(offspring_x)
-            pred_mean = np.asarray(pred_mean, dtype=np.float32)
-            pred_std = np.asarray(pred_std, dtype=np.float32)
-            pred_lcb = np.asarray(offspring_pred, dtype=np.float32)
-        else:
+            offspring_x = np.asarray(offspring_x, dtype=np.float32)
+            offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
+            true_offspring_y = np.asarray(problem.evaluate(offspring_x), dtype=np.float32)
             pred_mean = np.asarray(offspring_pred, dtype=np.float32)
-            pred_std = np.zeros_like(pred_mean, dtype=np.float32)
-            pred_lcb = np.asarray(offspring_pred, dtype=np.float32)
+            pred_std = np.asarray(offspring_sigma, dtype=np.float32)
+            pred_lcb = (pred_mean - float(args.beta) * pred_std).astype(np.float32)
+        else:
+            if str(args.surrogate_model).lower() == "tabpfn":
+                base_surrogate = fit_tabpfn_surrogate(
+                    archive_x=archive_x,
+                    archive_y=archive_y,
+                    device=str(args.device),
+                    n_estimators=int(args.ensemble_model),
+                )
+                surrogate = LowerConfidenceBoundSurrogate(base_surrogate, beta=float(args.beta))
+            else:
+                surrogate = build_surrogate(args, archive_x, archive_y)
+            nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
+
+            if solver_name == "nsga3":
+                solver = run_surrogate_nsga3
+            else:
+                solver = run_surrogate_nsga2
+            offspring_x, offspring_pred = solver(
+                surrogate=nsga2_surrogate,
+                gps=nsga2_models,
+                problem=nsga2_problem,
+                archive_x=archive_x,
+                pop_size=int(args.offspring_size),
+                surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+                seed=int(args.seed),
+            )
+            offspring_x = np.asarray(offspring_x, dtype=np.float32)
+            offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
+            true_offspring_y = np.asarray(problem.evaluate(offspring_x), dtype=np.float32)
+            if str(args.surrogate_model).lower() == "tabpfn":
+                pred_mean, pred_std = base_surrogate.predict_mean_std(offspring_x)
+                pred_mean = np.asarray(pred_mean, dtype=np.float32)
+                pred_std = np.asarray(pred_std, dtype=np.float32)
+                pred_lcb = np.asarray(offspring_pred, dtype=np.float32)
+            else:
+                pred_mean = np.asarray(offspring_pred, dtype=np.float32)
+                pred_std = np.zeros_like(pred_mean, dtype=np.float32)
+                pred_lcb = np.asarray(offspring_pred, dtype=np.float32)
 
         log(
             f"offspring_x shape = {tuple(offspring_x.shape)} | "

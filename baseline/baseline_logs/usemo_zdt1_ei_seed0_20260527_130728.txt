@@ -1,0 +1,6 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\baseline\baseline_logs\usemo_zdt1_ei_seed0_20260527_130728.txt
+reference_point = [0.9994000196456909, 6.057600021362305] (from ref_points_hv.py)
+candidate_solver = usemo
+nsga_af = ei | beta = 1.0000
+surrogate_nsga_steps = 2500
+iter 0 | front = 14 | HV = 2.604352

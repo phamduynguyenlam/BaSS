@@ -198,7 +198,7 @@ def parse_args() -> argparse.Namespace:
     if int(args.max_fe) <= int(args.init_fe):
         raise ValueError(f"max_fe must be greater than init_fe, got {args.max_fe} and {args.init_fe}.")
     if str(args.solver).lower() == "usemo" and str(args.nsga_af).lower() not in {"lcb", "ei"}:
-        raise ValueError("USEMO solver supports only --nsga_af lcb or --nsga_af ei.")
+        args.nsga_af = "ei"
     return args
 
 
@@ -387,7 +387,7 @@ def run_surrogate_optimizer(
             pop_size=int(args.offspring_size),
             surrogate_nsga_steps=int(args.surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
-            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
         )
         return offspring_x, offspring_pred
@@ -1028,7 +1028,7 @@ def run_policy_rollout(
                 pop_size=int(args.offspring_size),
                 surrogate_nsga_steps=int(args.surrogate_nsga_steps),
                 seed=int(args.seed) + int(step),
-                acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+                acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
                 beta=float(getattr(args, "beta", 1.0)),
             )
             offspring_x = np.asarray(offspring_x, dtype=np.float32)

@@ -203,7 +203,7 @@ def parse_args() -> argparse.Namespace:
     if bool(args.hybrid_nsga) and bool(args.hybrid_nsga_gp):
         raise ValueError("Use only one of --hybrid_nsga or --hybrid_nsga_gp at a time.")
     if str(args.solver).lower() == "usemo" and str(args.nsga_af).lower() not in {"lcb", "ei"}:
-        raise ValueError("USEMO solver supports only --nsga_af lcb or --nsga_af ei.")
+        args.nsga_af = "ei"
     return args
 
 
@@ -386,7 +386,7 @@ def run_surrogate_optimizer(
             pop_size=int(args.offspring_size),
             surrogate_nsga_steps=int(args.surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
-            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
         )
         return offspring_x, offspring_pred
@@ -421,7 +421,7 @@ def _generate_single_offspring_pool(
             pop_size=int(args.offspring_size),
             surrogate_nsga_steps=int(args.surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
-            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
         )
         return (
@@ -482,7 +482,7 @@ def generate_offspring_pool(
         return offspring_x, offspring_pred, offspring_sigma, group_indices
 
     gp_surrogate = build_named_surrogate(args, archive_x, archive_y, "gp")
-    second_surrogate_name = "gp2" if hybrid_gp_gp2 else "tabpfn"
+    second_surrogate_name = "gp2"
     second_surrogate = build_named_surrogate(args, archive_x, archive_y, second_surrogate_name)
     gp_x, gp_pred, gp_sigma = _generate_single_offspring_pool(
         args=args,

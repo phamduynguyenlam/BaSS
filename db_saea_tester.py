@@ -194,7 +194,7 @@ def parse_args() -> argparse.Namespace:
     if int(args.max_fe) <= int(args.init_fe):
         raise ValueError(f"max_fe must be greater than init_fe, got {args.max_fe} and {args.init_fe}.")
     if str(args.solver).lower() == "usemo" and str(args.nsga_af).lower() not in {"lcb", "ei"}:
-        raise ValueError("USEMO solver supports only --nsga_af lcb or --nsga_af ei.")
+        args.nsga_af = "ei"
     return args
 
 
@@ -371,7 +371,7 @@ def run_surrogate_optimizer(
             pop_size=int(args.offspring_size),
             surrogate_nsga_steps=int(args.surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
-            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
         )
         return offspring_x, offspring_pred
@@ -406,7 +406,7 @@ def _generate_single_offspring_pool(
             pop_size=int(args.offspring_size),
             surrogate_nsga_steps=int(args.surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
-            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
         )
         return (
@@ -461,7 +461,7 @@ def generate_offspring_pool(
         )
 
     gp_surrogate = build_named_surrogate(args, archive_x, archive_y, "gp")
-    tabpfn_surrogate = build_named_surrogate(args, archive_x, archive_y, "tabpfn")
+    gp2_surrogate = build_named_surrogate(args, archive_x, archive_y, "gp2")
     gp_x, gp_pred, gp_sigma = _generate_single_offspring_pool(
         args=args,
         nsga_problem=nsga_problem,
@@ -476,9 +476,9 @@ def generate_offspring_pool(
         nsga_problem=nsga_problem,
         archive_x=archive_x,
         archive_y=archive_y,
-        surrogate=tabpfn_surrogate,
+        surrogate=gp2_surrogate,
         step=int(step) * 2 + 1,
-        surrogate_name="tabpfn",
+        surrogate_name="gp2",
     )
     return (
         np.vstack([gp_x, tab_x]).astype(np.float32),
