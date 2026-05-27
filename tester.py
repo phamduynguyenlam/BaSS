@@ -23,8 +23,9 @@ from infill import (
     NDPBIConvergence,
     NDPBIDiversity,
 )
-from nsga2_solver import run_surrogate_nsga2
-from nsga3_solver import run_surrogate_nsga3
+from solver.nsga2_solver import run_surrogate_nsga2
+from solver.nsga3_solver import run_surrogate_nsga3
+from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point, get_true_pareto_hv
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
@@ -181,13 +182,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n_heads", type=int, default=8)
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
-    parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb"])
+    parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb", "ei"])
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--hybrid_nsga", action="store_true")
+    parser.add_argument("--hybrid_nsga_gp", action="store_true")
     parser.add_argument("--compare_infill", type=str, default=None)
     parser.add_argument("--compare_algo", type=str, default=None, choices=["db_saea"])
     parser.add_argument("--compare_agent_pth", type=str, default=None)
-    parser.add_argument("--nsga3", action="store_true")
+    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "usemo"])
     parser.add_argument("--pseudo_front_only", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
@@ -198,6 +200,10 @@ def parse_args() -> argparse.Namespace:
         raise ValueError(f"max_fe must be greater than init_fe, got {args.max_fe} and {args.init_fe}.")
     if args.compare_infill is not None and args.compare_algo is not None:
         raise ValueError("Use only one of --compare_infill or --compare_algo at a time.")
+    if bool(args.hybrid_nsga) and bool(args.hybrid_nsga_gp):
+        raise ValueError("Use only one of --hybrid_nsga or --hybrid_nsga_gp at a time.")
+    if str(args.solver).lower() == "usemo" and str(args.nsga_af).lower() not in {"lcb", "ei"}:
+        raise ValueError("USEMO solver supports only --nsga_af lcb or --nsga_af ei.")
     return args
 
 
@@ -344,27 +350,54 @@ def run_surrogate_optimizer(
     args: argparse.Namespace,
     nsga_problem,
     archive_x: np.ndarray,
+    archive_y: np.ndarray,
     nsga2_surrogate: Any | None,
     nsga2_models: list[Any] | None,
     step: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    solver = run_surrogate_nsga3 if bool(getattr(args, "nsga3", False)) else run_surrogate_nsga2
-    return solver(
-        gps=nsga2_models,
-        surrogate=nsga2_surrogate,
-        problem=nsga_problem,
-        archive_x=archive_x,
-        pop_size=int(args.offspring_size),
-        surrogate_nsga_steps=int(args.surrogate_nsga_steps),
-        seed=int(args.seed) + int(step),
-    )
+    solver_name = str(getattr(args, "solver", "nsga2")).lower()
+    if solver_name == "nsga2":
+        solver = run_surrogate_nsga2
+        return solver(
+            gps=nsga2_models,
+            surrogate=nsga2_surrogate,
+            problem=nsga_problem,
+            archive_x=archive_x,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+        )
+    if solver_name == "nsga3":
+        solver = run_surrogate_nsga3
+        return solver(
+            gps=nsga2_models,
+            surrogate=nsga2_surrogate,
+            problem=nsga_problem,
+            archive_x=archive_x,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+        )
+    if solver_name == "usemo":
+        offspring_x, offspring_pred, _ = run_surrogate_usemo(
+            problem=nsga_problem,
+            archive_x=archive_x,
+            archive_y=archive_y,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            beta=float(getattr(args, "beta", 1.0)),
+        )
+        return offspring_x, offspring_pred
+    raise ValueError(f"Unsupported solver: {solver_name}")
 
 
 def resolve_surrogate_nsga_steps(args: argparse.Namespace, surrogate_name: str) -> int:
     name = str(surrogate_name).lower()
     if name == "tabpfn" and getattr(args, "tabpfn_nsga_steps", None) is not None:
         return int(args.tabpfn_nsga_steps)
-    if name == "gp" and getattr(args, "gp_nsga_steps", None) is not None:
+    if name in {"gp", "gp2"} and getattr(args, "gp_nsga_steps", None) is not None:
         return int(args.gp_nsga_steps)
     return int(args.surrogate_nsga_steps)
 
@@ -379,6 +412,24 @@ def _generate_single_offspring_pool(
     step: int,
     surrogate_name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    solver_name = str(getattr(args, "solver", "nsga2")).lower()
+    if solver_name == "usemo":
+        offspring_x, offspring_pred, offspring_sigma = run_surrogate_usemo(
+            problem=nsga_problem,
+            archive_x=archive_x,
+            archive_y=archive_y,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            beta=float(getattr(args, "beta", 1.0)),
+        )
+        return (
+            np.asarray(offspring_x, dtype=np.float32),
+            np.asarray(offspring_pred, dtype=np.float32),
+            np.asarray(offspring_sigma, dtype=np.float32),
+        )
+
     local_args = argparse.Namespace(**vars(args))
     local_args.surrogate_nsga_steps = int(resolve_surrogate_nsga_steps(args, surrogate_name))
     nsga2_surrogate, nsga2_models = prepare_nsga_surrogate(args, surrogate)
@@ -386,6 +437,7 @@ def _generate_single_offspring_pool(
         args=local_args,
         nsga_problem=nsga_problem,
         archive_x=archive_x,
+        archive_y=archive_y,
         nsga2_surrogate=nsga2_surrogate,
         nsga2_models=nsga2_models,
         step=step,
@@ -409,7 +461,13 @@ def generate_offspring_pool(
     archive_y: np.ndarray,
     step: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
-    if not bool(getattr(args, "hybrid_nsga", False)):
+    if str(getattr(args, "solver", "nsga2")).lower() == "usemo" and (
+        bool(getattr(args, "hybrid_nsga", False)) or bool(getattr(args, "hybrid_nsga_gp", False))
+    ):
+        raise ValueError("USEMO solver does not support --hybrid_nsga or --hybrid_nsga_gp.")
+    hybrid_gp_tabpfn = bool(getattr(args, "hybrid_nsga", False))
+    hybrid_gp_gp2 = bool(getattr(args, "hybrid_nsga_gp", False))
+    if not hybrid_gp_tabpfn and not hybrid_gp_gp2:
         surrogate = build_surrogate(args, archive_x, archive_y)
         offspring_x, offspring_pred, offspring_sigma = _generate_single_offspring_pool(
             args=args,
@@ -424,7 +482,8 @@ def generate_offspring_pool(
         return offspring_x, offspring_pred, offspring_sigma, group_indices
 
     gp_surrogate = build_named_surrogate(args, archive_x, archive_y, "gp")
-    tabpfn_surrogate = build_named_surrogate(args, archive_x, archive_y, "tabpfn")
+    second_surrogate_name = "gp2" if hybrid_gp_gp2 else "tabpfn"
+    second_surrogate = build_named_surrogate(args, archive_x, archive_y, second_surrogate_name)
     gp_x, gp_pred, gp_sigma = _generate_single_offspring_pool(
         args=args,
         nsga_problem=nsga_problem,
@@ -434,21 +493,21 @@ def generate_offspring_pool(
         step=int(step) * 2,
         surrogate_name="gp",
     )
-    tab_x, tab_pred, tab_sigma = _generate_single_offspring_pool(
+    second_x, second_pred, second_sigma = _generate_single_offspring_pool(
         args=args,
         nsga_problem=nsga_problem,
         archive_x=archive_x,
         archive_y=archive_y,
-        surrogate=tabpfn_surrogate,
+        surrogate=second_surrogate,
         step=int(step) * 2 + 1,
-        surrogate_name="tabpfn",
+        surrogate_name=second_surrogate_name,
     )
-    merged_x = np.vstack([gp_x, tab_x]).astype(np.float32)
-    merged_pred = np.vstack([gp_pred, tab_pred]).astype(np.float32)
-    merged_sigma = np.vstack([gp_sigma, tab_sigma]).astype(np.float32)
+    merged_x = np.vstack([gp_x, second_x]).astype(np.float32)
+    merged_pred = np.vstack([gp_pred, second_pred]).astype(np.float32)
+    merged_sigma = np.vstack([gp_sigma, second_sigma]).astype(np.float32)
     group_indices = [
         np.arange(0, int(gp_x.shape[0]), dtype=np.int64),
-        np.arange(int(gp_x.shape[0]), int(gp_x.shape[0] + tab_x.shape[0]), dtype=np.int64),
+        np.arange(int(gp_x.shape[0]), int(gp_x.shape[0] + second_x.shape[0]), dtype=np.int64),
     ]
     return merged_x, merged_pred, merged_sigma, group_indices
 
@@ -670,7 +729,7 @@ def run_policy_rollout(
                 )
                 logits = out["logits"].reshape(-1)
             if bool(getattr(args, "pseudo_front_only", False)):
-                if bool(getattr(args, "hybrid_nsga", False)):
+                if bool(getattr(args, "hybrid_nsga", False)) or bool(getattr(args, "hybrid_nsga_gp", False)):
                     selected_idx, _ = select_offspring_index_grouped_pseudo_front_qmax(
                         logits,
                         offspring_pred,
@@ -802,7 +861,7 @@ def run_policy_rollout(
         "init_fe": int(args.init_fe),
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
-        "candidate_solver": "nsga3" if bool(getattr(args, "nsga3", False)) else "nsga2",
+        "candidate_solver": str(getattr(args, "solver", "nsga2")).lower(),
         "pseudo_front_only": bool(getattr(args, "pseudo_front_only", False)),
         "reward_lambda": float(args.reward_lambda),
         "reward_scheme": int(reward_scheme_id),
@@ -1105,9 +1164,10 @@ def main(agent_name: str = "disc") -> None:
         agent_load_sec = time.perf_counter() - agent_load_started_at
         if bool(args.debug):
             log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
-            log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
+            log(f"candidate_solver = {str(getattr(args, 'solver', 'nsga2')).lower()}")
             log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
             log(f"hybrid_nsga = {int(bool(args.hybrid_nsga))}")
+            log(f"hybrid_nsga_gp = {int(bool(getattr(args, 'hybrid_nsga_gp', False)))}")
             log(f"surrogate_nsga_steps = {int(args.surrogate_nsga_steps)}")
             log(f"gp_nsga_steps = {resolve_surrogate_nsga_steps(args, 'gp')}")
             log(f"tabpfn_nsga_steps = {resolve_surrogate_nsga_steps(args, 'tabpfn')}")

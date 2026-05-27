@@ -15,7 +15,7 @@ import torch.optim as optim
 import numpy as np
 
 from agents.db_saea import DBSAEAAgent
-from nsga2_solver import run_surrogate_nsga2
+from solver.nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3

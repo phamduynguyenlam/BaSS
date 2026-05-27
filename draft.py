@@ -6,8 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
-from nsga2_solver import run_surrogate_nsga2
-from nsga3_solver import run_surrogate_nsga3
+from solver.nsga2_solver import run_surrogate_nsga2
+from solver.nsga3_solver import run_surrogate_nsga3
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume

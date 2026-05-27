@@ -16,7 +16,7 @@ import numpy as np
 
 from agents.db_saea import DBSAEAAgent
 from agents.disc import Disc, DiscAF
-from nsga2_solver import run_surrogate_nsga2
+from solver.nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
@@ -752,6 +752,12 @@ def env_key(problem_name, dim):
     return f"{str(problem_name).upper()}-{int(dim)}D"
 
 
+def effective_surrogate_label(cfg_like) -> str:
+    if bool(getattr(cfg_like, "hybrid_nsga", False)):
+        return "gp+gp2"
+    return str(getattr(cfg_like, "surrogate_model", "gp")).lower()
+
+
 class DiscSAEAEnv:
     def __init__(self, problem_name, dim, seed, cfg_dict):
         self.problem_name = str(problem_name)
@@ -1183,7 +1189,7 @@ def train_disc_ddqn_ray(
         f"reward_lambda={cfg.reward_lambda:.4f} | "
         f"agent={cfg.agent_name} | "
         f"policy={cfg.policy_mode} | "
-        f"surrogate={cfg.surrogate_model} | "
+        f"surrogate={effective_surrogate_label(cfg)} | "
         f"sampling_backend={'ray' if use_ray else 'process_pool'} | "
         f"epochs={cfg.train_iters} | "
         f"sur_steps={cfg.surrogate_nsga_steps} | "
@@ -1215,7 +1221,7 @@ def train_disc_ddqn_ray(
             f"heldout={cfg.heldout_problem} | "
             f"envs_active={len(env_specs)}/{len(env_specs)} | "
             f"agent={cfg.agent_name} | "
-            f"surrogate={cfg.surrogate_model} | "
+            f"surrogate={effective_surrogate_label(cfg)} | "
             f"sur_steps={cfg.surrogate_nsga_steps} | "
             f"eps={epsilon:.3f}"
         )
@@ -1333,7 +1339,7 @@ def train_disc_ddqn_ray(
             log(
                 f"epoch {epoch} done | mean reward/FE = {mean_ep_reward:.4f} | "
                 f"set = {cfg.training_set} | heldout = {cfg.heldout_problem} | "
-            f"surrogate = {cfg.surrogate_model} | sur_steps = {cfg.surrogate_nsga_steps} | "
+            f"surrogate = {effective_surrogate_label(cfg)} | sur_steps = {cfg.surrogate_nsga_steps} | "
                 f"workers = {actual_num_workers} | replay = {len(replay)} | "
                 f"reward_scheme = {cfg.reward_scheme} | policy = {cfg.policy_mode} | update = skipped"
                 f" | update_time_sec = {time.perf_counter() - update_start_time:.3f}"
@@ -1414,7 +1420,7 @@ def train_disc_ddqn_ray(
             f"set={cfg.training_set} | "
             f"heldout={cfg.heldout_problem} | "
             f"envs_active={len(env_specs)}/{len(env_specs)} | "
-            f"surrogate={cfg.surrogate_model} | "
+            f"surrogate={effective_surrogate_label(cfg)} | "
             f"sur_steps={cfg.surrogate_nsga_steps} | "
             f"updates={cfg.updates_per_epoch} | "
             f"update_time_sec={update_elapsed:.3f} | "
@@ -1442,7 +1448,7 @@ def train_disc_ddqn_ray(
         log(
             f"epoch {epoch} done | mean reward/FE = {mean_ep_reward:.4f} | "
             f"set = {cfg.training_set} | heldout = {cfg.heldout_problem} | "
-            f"surrogate = {cfg.surrogate_model} | sur_steps = {cfg.surrogate_nsga_steps} | "
+            f"surrogate = {effective_surrogate_label(cfg)} | sur_steps = {cfg.surrogate_nsga_steps} | "
             f"workers = {actual_num_workers} | replay = {len(replay)} | "
             f"reward_scheme = {cfg.reward_scheme} | policy = {cfg.policy_mode} | "
             f"updates = {len(update_metrics_list)} | "

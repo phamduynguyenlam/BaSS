@@ -9,7 +9,7 @@ from pymoo.optimize import minimize
 from pymoo.termination import get_termination
 from pymoo.util.ref_dirs import get_reference_directions
 
-from nsga2_solver import GPSurrogateProblem, _ModelListSurrogate
+from solver.nsga2_solver import GPSurrogateProblem, _ModelListSurrogate
 
 
 @dataclass(frozen=True)

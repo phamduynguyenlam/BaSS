@@ -23,8 +23,9 @@ from infill import (
     NDPBIConvergence,
     NDPBIDiversity,
 )
-from nsga2_solver import run_surrogate_nsga2
-from nsga3_solver import run_surrogate_nsga3
+from solver.nsga2_solver import run_surrogate_nsga2
+from solver.nsga3_solver import run_surrogate_nsga3
+from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
@@ -185,10 +186,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ff_dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--softmax", action="store_true")
-    parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb"])
+    parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb", "ei"])
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--compare_infill", type=str, default=None)
-    parser.add_argument("--nsga3", action="store_true")
+    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "usemo"])
     parser.add_argument("--pseudo_front_only", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
@@ -196,6 +197,8 @@ def parse_args() -> argparse.Namespace:
 
     if int(args.max_fe) <= int(args.init_fe):
         raise ValueError(f"max_fe must be greater than init_fe, got {args.max_fe} and {args.init_fe}.")
+    if str(args.solver).lower() == "usemo" and str(args.nsga_af).lower() not in {"lcb", "ei"}:
+        raise ValueError("USEMO solver supports only --nsga_af lcb or --nsga_af ei.")
     return args
 
 
@@ -350,20 +353,45 @@ def run_surrogate_optimizer(
     args: argparse.Namespace,
     nsga_problem,
     archive_x: np.ndarray,
+    archive_y: np.ndarray,
     nsga2_surrogate: Any | None,
     nsga2_models: list[Any] | None,
     step: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    solver = run_surrogate_nsga3 if bool(getattr(args, "nsga3", False)) else run_surrogate_nsga2
-    return solver(
-        gps=nsga2_models,
-        surrogate=nsga2_surrogate,
-        problem=nsga_problem,
-        archive_x=archive_x,
-        pop_size=int(args.offspring_size),
-        surrogate_nsga_steps=int(args.surrogate_nsga_steps),
-        seed=int(args.seed) + int(step),
-    )
+    solver_name = str(getattr(args, "solver", "nsga2")).lower()
+    if solver_name == "nsga2":
+        return run_surrogate_nsga2(
+            gps=nsga2_models,
+            surrogate=nsga2_surrogate,
+            problem=nsga_problem,
+            archive_x=archive_x,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+        )
+    if solver_name == "nsga3":
+        return run_surrogate_nsga3(
+            gps=nsga2_models,
+            surrogate=nsga2_surrogate,
+            problem=nsga_problem,
+            archive_x=archive_x,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+        )
+    if solver_name == "usemo":
+        offspring_x, offspring_pred, _ = run_surrogate_usemo(
+            problem=nsga_problem,
+            archive_x=archive_x,
+            archive_y=archive_y,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+            acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+            beta=float(getattr(args, "beta", 1.0)),
+        )
+        return offspring_x, offspring_pred
+    raise ValueError(f"Unsupported solver: {solver_name}")
 
 
 def predict_surrogate_mean(surrogate: Any, x: np.ndarray) -> np.ndarray:
@@ -992,23 +1020,39 @@ def run_policy_rollout(
             surrogate = build_surrogate(args, archive_x, archive_y, existing_surrogate=reuse_surrogate)
             surrogate_needs_refit = False
 
-        nsga2_surrogate, nsga2_models = prepare_nsga_surrogate(args, surrogate)
-        offspring_x, offspring_pred = run_surrogate_optimizer(
-            args=args,
-            nsga_problem=nsga2_problem,
-            archive_x=archive_x,
-            nsga2_surrogate=nsga2_surrogate,
-            nsga2_models=nsga2_models,
-            step=step,
-        )
-        offspring_x = np.asarray(offspring_x, dtype=np.float32)
-        offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
-        offspring_sigma = build_offspring_sigma(
-            archive_x=archive_x,
-            archive_y=archive_y,
-            offspring_x=offspring_x,
-            surrogate=surrogate,
-        )
+        if str(getattr(args, "solver", "nsga2")).lower() == "usemo":
+            offspring_x, offspring_pred, offspring_sigma = run_surrogate_usemo(
+                problem=nsga2_problem,
+                archive_x=archive_x,
+                archive_y=archive_y,
+                pop_size=int(args.offspring_size),
+                surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+                seed=int(args.seed) + int(step),
+                acquisition=str(getattr(args, "nsga_af", "lcb")).lower(),
+                beta=float(getattr(args, "beta", 1.0)),
+            )
+            offspring_x = np.asarray(offspring_x, dtype=np.float32)
+            offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
+            offspring_sigma = np.asarray(offspring_sigma, dtype=np.float32)
+        else:
+            nsga2_surrogate, nsga2_models = prepare_nsga_surrogate(args, surrogate)
+            offspring_x, offspring_pred = run_surrogate_optimizer(
+                args=args,
+                nsga_problem=nsga2_problem,
+                archive_x=archive_x,
+                archive_y=archive_y,
+                nsga2_surrogate=nsga2_surrogate,
+                nsga2_models=nsga2_models,
+                step=step,
+            )
+            offspring_x = np.asarray(offspring_x, dtype=np.float32)
+            offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
+            offspring_sigma = build_offspring_sigma(
+                archive_x=archive_x,
+                archive_y=archive_y,
+                offspring_x=offspring_x,
+                surrogate=surrogate,
+            )
 
         if policy_name.lower() == "disc":
             if disc is None:
@@ -1124,7 +1168,7 @@ def run_policy_rollout(
         "init_fe": int(args.init_fe),
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
-        "candidate_solver": "nsga3" if bool(getattr(args, "nsga3", False)) else "nsga2",
+        "candidate_solver": str(getattr(args, "solver", "nsga2")).lower(),
         "pseudo_front_only": bool(getattr(args, "pseudo_front_only", False)),
         "reward_lambda": float(args.reward_lambda),
         "reward_scheme": int(reward_scheme_id),
@@ -1175,7 +1219,7 @@ def main() -> None:
         true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
         true_pareto_hv = None if true_pareto is None else float(hypervolume(true_pareto, ref_point))
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
-        log(f"candidate_solver = {'nsga3' if bool(args.nsga3) else 'nsga2'}")
+        log(f"candidate_solver = {str(getattr(args, 'solver', 'nsga2')).lower()}")
         log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
         log(f"lhs_sample_sec = {lhs_sample_sec:.3f}")
         log(f"pseudo_front_only = {int(bool(args.pseudo_front_only))}")
