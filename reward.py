@@ -68,9 +68,8 @@ def archive_fit_mse_reward(
         return 0.0
 
     true_norm, pred_norm = _normalize_joint(archive_true, archive_pred)
-    true_scalar = true_norm.mean(axis=1)
-    pred_scalar = pred_norm.mean(axis=1)
-    return float(np.mean((true_scalar - pred_scalar) ** 2))
+    per_entry_mse = np.mean((true_norm - pred_norm) ** 2, axis=1)
+    return float(np.mean(per_entry_mse))
 
 
 def _filter_candidates_on_front(

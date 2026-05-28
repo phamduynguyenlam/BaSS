@@ -73,6 +73,8 @@ class TrainConfig:
     kan_grid: int = 5
     reward_scheme: int = 3
     reward_lambda: float = 10.0
+    reward_lambda1: float = 25.0
+    reward_lambda2: float = -1.0
     policy_mode: str = "epsilon_greedy"
     training_set: int = 1
     heldout_problem: str = "ZDT1"
@@ -142,6 +144,8 @@ def parse_args():
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=3, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
+    parser.add_argument("--reward_lambda1", type=float, default=25.0)
+    parser.add_argument("--reward_lambda2", type=float, default=-1.0)
     parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--num_workers", type=int, default=None)
@@ -743,6 +747,8 @@ def compute_env_reward(
     ref_point,
     reward_scheme_id,
     reward_lambda=10.0,
+    reward_lambda1=25.0,
+    reward_lambda2=-1.0,
     true_pareto_hv=None,
     archive_true_y=None,
     archive_pred_y=None,
@@ -779,6 +785,8 @@ def compute_env_reward(
             true_pareto_hv=float(true_pareto_hv),
             archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
             archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
+            hv_lambda=float(reward_lambda1),
+            fit_lambda=float(reward_lambda2),
         )
         return (float(breakdown["reward_total"]), breakdown) if return_breakdown else float(breakdown["reward_total"])
     raise ValueError(f"Unsupported reward_scheme: {reward_scheme_id}")
@@ -995,6 +1003,8 @@ class DiscSAEAEnv:
             ref_point=self.ref_point,
             reward_scheme_id=int(self.cfg["reward_scheme"]),
             reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
+            reward_lambda1=float(self.cfg.get("reward_lambda1", 25.0)),
+            reward_lambda2=float(self.cfg.get("reward_lambda2", -1.0)),
             true_pareto_hv=self.true_pareto_hv,
             archive_true_y=self.archive_y,
             archive_pred_y=archive_pred_y,
@@ -1207,6 +1217,8 @@ def train_disc_ddqn_ray(
     gamma=None,
     reward_scheme=3,
     reward_lambda=10.0,
+    reward_lambda1=25.0,
+    reward_lambda2=-1.0,
     surrogate_model="gp",
     training_set=1,
     num_workers=None,
@@ -1227,6 +1239,8 @@ def train_disc_ddqn_ray(
         cfg.gamma = float(gamma)
     cfg.reward_scheme = int(reward_scheme)
     cfg.reward_lambda = float(reward_lambda)
+    cfg.reward_lambda1 = float(reward_lambda1)
+    cfg.reward_lambda2 = float(reward_lambda2)
     cfg.surrogate_model = str(surrogate_model).lower()
     cfg.training_set = int(training_set)
     cfg.heldout_problem = str(problem_name).upper()
@@ -1328,6 +1342,8 @@ def train_disc_ddqn_ray(
         f"workers={actual_num_workers} | "
         f"reward_scheme={cfg.reward_scheme} | "
         f"reward_lambda={cfg.reward_lambda:.4f} | "
+        f"reward_lambda1={cfg.reward_lambda1:.4f} | "
+        f"reward_lambda2={cfg.reward_lambda2:.4f} | "
         f"agent={cfg.agent_name} | "
         f"policy={cfg.policy_mode} | "
         f"surrogate={effective_surrogate_label(cfg)} | "
@@ -1644,6 +1660,8 @@ if __name__ == "__main__":
         gamma=args.gamma,
         reward_scheme=int(args.reward_scheme),
         reward_lambda=float(args.reward_lambda),
+        reward_lambda1=float(args.reward_lambda1),
+        reward_lambda2=float(args.reward_lambda2),
         surrogate_model=str(args.surrogate_model),
         training_set=int(args.training_set),
         num_workers=args.num_workers,
