@@ -23,3 +23,16 @@ iter 20 | front = 8 | HV = 5.446071 | reward = 1.160361
 iter 21 | front = 8 | HV = 5.507001 | reward = 3.199994
 iter 22 | front = 8 | HV = 5.507001 | reward = -1.000000
 iter 23 | front = 9 | HV = 5.507002 | reward = 1.584763
+iter 24 | front = 7 | HV = 5.507006 | reward = 1.140886
+iter 25 | front = 7 | HV = 5.507006 | reward = -1.000000
+iter 26 | front = 7 | HV = 5.507006 | reward = -1.000000
+iter 27 | front = 7 | HV = 5.507006 | reward = -1.000000
+iter 28 | front = 7 | HV = 5.507013 | reward = 2.052673
+iter 29 | front = 7 | HV = 5.507013 | reward = -1.000000
+iter 30 | front = 7 | HV = 5.507013 | reward = -1.000000
+iter 31 | front = 7 | HV = 5.507013 | reward = -1.000000
+iter 32 | front = 8 | HV = 5.507843 | reward = 1.864000
+iter 33 | front = 8 | HV = 5.507843 | reward = -1.000000
+iter 34 | front = 8 | HV = 5.507843 | reward = -1.000000
+iter 35 | front = 8 | HV = 5.507843 | reward = -1.000000
+iter 36 | front = 8 | HV = 5.507843 | reward = -1.000000
