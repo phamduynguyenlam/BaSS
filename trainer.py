@@ -360,6 +360,18 @@ def build_offspring_sigma(archive_x, archive_y, offspring_x, surrogate):
     return local_sigma.astype(np.float32)
 
 
+def build_archive_surrogate_stats(archive_x, archive_y, surrogate):
+    archive_x = np.asarray(archive_x, dtype=np.float32)
+    archive_y = np.asarray(archive_y, dtype=np.float32)
+    archive_pred = predict_surrogate_mean(surrogate, archive_x)
+    archive_sigma = predict_surrogate_std(surrogate, archive_x)
+    if archive_sigma.ndim == 1:
+        archive_sigma = archive_sigma.reshape(-1, 1)
+    if archive_sigma.shape[1] != archive_y.shape[1]:
+        archive_sigma = np.repeat(archive_sigma.mean(axis=1, keepdims=True), archive_y.shape[1], axis=1)
+    return archive_pred.astype(np.float32), archive_sigma.astype(np.float32)
+
+
 def _generate_single_offspring_pool(cfg_dict, archive_x, archive_y, nsga2_problem, seed, surrogate_name):
     surrogate = build_named_surrogate_from_cfg(
         cfg_dict,
@@ -471,7 +483,9 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
         y_sur,
         sigma_sur,
         progress,
+        prev_action,
         prev_reward,
+        prev_ela,
         lower_bound,
         upper_bound,
         actions,
@@ -482,7 +496,9 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
         next_y_sur,
         next_sigma_sur,
         next_progress,
+        next_prev_action,
         next_prev_reward,
+        next_prev_ela,
         dones,
     ) = batch
 
@@ -499,7 +515,9 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
     y_sur = to_tensor(pad_stack_rows(y_sur), device)
     sigma_sur = to_tensor(pad_stack_rows(sigma_sur), device)
     progress = to_tensor(np.asarray(progress).reshape(-1, 1), device)
+    prev_action = to_tensor(np.asarray(prev_action).reshape(-1, 1), device)
     prev_reward = to_tensor(np.asarray(prev_reward).reshape(-1, 1), device)
+    prev_ela = to_tensor(pad_stack_rows(prev_ela), device)
 
     lower_bound = to_tensor(pad_stack_rows(lower_bound), device)
     upper_bound = to_tensor(pad_stack_rows(upper_bound), device)
@@ -514,7 +532,9 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
     next_y_sur = to_tensor(pad_stack_rows(next_y_sur), device)
     next_sigma_sur = to_tensor(pad_stack_rows(next_sigma_sur), device)
     next_progress = to_tensor(np.asarray(next_progress).reshape(-1, 1), device)
+    next_prev_action = to_tensor(np.asarray(next_prev_action).reshape(-1, 1), device)
     next_prev_reward = to_tensor(np.asarray(next_prev_reward).reshape(-1, 1), device)
+    next_prev_ela = to_tensor(pad_stack_rows(next_prev_ela), device)
     batch_to_device_sec = time.perf_counter() - batch_to_device_started_at
 
     out = agent(
@@ -526,7 +546,9 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
         progress=progress,
         lower_bound=lower_bound,
         upper_bound=upper_bound,
+        prev_action=prev_action,
         prev_reward=prev_reward,
+        prev_ela=prev_ela,
         archive_mask=archive_mask,
         candidate_mask=candidate_mask,
         decode_type="q_greedy",
@@ -545,7 +567,9 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
             progress=next_progress,
             lower_bound=lower_bound,
             upper_bound=upper_bound,
+            prev_action=next_prev_action,
             prev_reward=next_prev_reward,
+            prev_ela=next_prev_ela,
             archive_mask=next_archive_mask,
             candidate_mask=next_candidate_mask,
             decode_type="q_greedy",
@@ -562,7 +586,9 @@ def _compute_ddqn_loss_same_objectives(agent, target_agent, batch, cfg):
             progress=next_progress,
             lower_bound=lower_bound,
             upper_bound=upper_bound,
+            prev_action=next_prev_action,
             prev_reward=next_prev_reward,
+            prev_ela=next_prev_ela,
             archive_mask=next_archive_mask,
             candidate_mask=next_candidate_mask,
             decode_type="q_greedy",
@@ -593,7 +619,9 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
         y_sur,
         sigma_sur,
         progress,
+        prev_action,
         prev_reward,
+        prev_ela,
         lower_bound,
         upper_bound,
         actions,
@@ -604,7 +632,9 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
         next_y_sur,
         next_sigma_sur,
         next_progress,
+        next_prev_action,
         next_prev_reward,
+        next_prev_ela,
         dones,
     ) = batch
 
@@ -632,7 +662,9 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
         y_sur,
         sigma_sur,
         progress,
+        prev_action,
         prev_reward,
+        prev_ela,
         lower_bound,
         upper_bound,
         actions,
@@ -643,7 +675,9 @@ def compute_ddqn_loss(agent, target_agent, batch, cfg):
         next_y_sur,
         next_sigma_sur,
         next_progress,
+        next_prev_action,
         next_prev_reward,
+        next_prev_ela,
         dones,
     ]
 
@@ -800,7 +834,11 @@ class DiscSAEAEnv:
         self.true_pareto_hv = None
         self.surrogate = None
         self._surrogate_dirty = False
+        self.archive_pred = None
+        self.archive_sigma = None
+        self.prev_action = np.array([np.nan], dtype=np.float32)
         self.prev_reward = np.array([np.nan], dtype=np.float32)
+        self.prev_ela = np.full((int(self.cfg["hidden_dim"]),), np.nan, dtype=np.float32)
         self.active_surrogate_nsga_steps = int(self.cfg["surrogate_nsga_steps"])
 
     def _progress(self):
@@ -833,6 +871,16 @@ class DiscSAEAEnv:
         if self.surrogate is None or bool(self._surrogate_dirty):
             self._fit_surrogate()
         return self.surrogate
+
+    def _refresh_archive_surrogate_stats(self):
+        surrogate = self._ensure_surrogate_ready()
+        if surrogate is None:
+            raise RuntimeError("DISC archive ELA requires a fitted surrogate.")
+        self.archive_pred, self.archive_sigma = build_archive_surrogate_stats(
+            archive_x=self.archive_x,
+            archive_y=self.archive_y,
+            surrogate=surrogate,
+        )
 
     def _refresh_offspring(self):
         surrogate, offspring_x, offspring_y, offspring_sigma = generate_offspring_pool(
@@ -868,18 +916,22 @@ class DiscSAEAEnv:
         return {
             "x_true": np.asarray(self.archive_x, dtype=np.float32).copy(),
             "y_true": np.asarray(self.archive_y, dtype=np.float32).copy(),
-            "x_sur": np.asarray(self.offspring_x, dtype=np.float32).copy(),
-            "y_sur": np.asarray(self.offspring_y, dtype=np.float32).copy(),
-            "sigma_sur": np.asarray(self.offspring_sigma, dtype=np.float32).copy(),
+            "x_sur": np.asarray(self.archive_x, dtype=np.float32).copy(),
+            "y_sur": np.asarray(self.archive_pred, dtype=np.float32).copy(),
+            "sigma_sur": np.asarray(self.archive_sigma, dtype=np.float32).copy(),
             "progress": np.array([self._progress()], dtype=np.float32),
+            "prev_action": np.asarray(self.prev_action, dtype=np.float32).copy(),
             "prev_reward": np.asarray(self.prev_reward, dtype=np.float32).copy(),
+            "prev_ela": np.asarray(self.prev_ela, dtype=np.float32).copy(),
             "lower_bound": self.lower_bound.copy(),
             "upper_bound": self.upper_bound.copy(),
         }
 
     def reset(self):
         self.t = 0
+        self.prev_action = np.array([np.nan], dtype=np.float32)
         self.prev_reward = np.array([np.nan], dtype=np.float32)
+        self.prev_ela = np.full((int(self.cfg["hidden_dim"]),), np.nan, dtype=np.float32)
         self.active_surrogate_nsga_steps = int(self.cfg["surrogate_nsga_steps"])
         self.archive_x = latin_hypercube_sample(
             n_samples=int(self.cfg["init_size"]),
@@ -903,11 +955,15 @@ class DiscSAEAEnv:
         self.nsga2_problem = make_nsga2_problem_adapter(self.problem, int(self.archive_y.shape[1]))
         # Pretrain surrogate on the initial archive (default: 80 points), then generate first offspring pool.
         self._fit_surrogate()
+        self._refresh_archive_surrogate_stats()
         self._refresh_offspring()
         return self._build_state()
 
     def step(self, action_idx, state):
-        del state
+        if state is not None:
+            if "current_ela" in state:
+                self.prev_ela = np.asarray(state["current_ela"], dtype=np.float32).reshape(-1).copy()
+            self.prev_action = np.array([float(action_idx)], dtype=np.float32)
         self.active_surrogate_nsga_steps = int(Disc.action_to_surrogate_nsga_steps(int(action_idx)))
         self._refresh_offspring()
         chosen_idx = self._select_candidate_index()
@@ -941,7 +997,10 @@ class DiscSAEAEnv:
         done = self.t >= self.max_steps
         self._surrogate_dirty = bool(not done)
         if not done:
+            self._refresh_archive_surrogate_stats()
             self._refresh_offspring()
+        else:
+            self._refresh_archive_surrogate_stats()
         return self._build_state(), float(reward), bool(done)
 
     def current_hv(self):
@@ -986,7 +1045,9 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
                 y_sur=to_tensor(state["y_sur"][None, ...], device),
                 sigma_sur=to_tensor(state["sigma_sur"][None, ...], device),
                 progress=to_tensor(state["progress"].reshape(1, 1), device),
+                prev_action=to_tensor(state["prev_action"].reshape(1, 1), device),
                 prev_reward=to_tensor(state["prev_reward"].reshape(1, 1), device),
+                prev_ela=to_tensor(state["prev_ela"][None, ...], device),
                 lower_bound=to_tensor(state["lower_bound"][None, ...], device),
                 upper_bound=to_tensor(state["upper_bound"][None, ...], device),
                 decode_type=str(cfg_dict.get("policy_mode", "epsilon_greedy")),
@@ -994,7 +1055,9 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
             )
 
         action = select_action_from_output(out)
-        next_state, reward, done = env.step(action, state)
+        state_for_step = dict(state)
+        state_for_step["current_ela"] = out["ela"].reshape(-1).detach().cpu().numpy().astype(np.float32)
+        next_state, reward, done = env.step(action, state_for_step)
 
         transitions.append((
             state["x_true"],
@@ -1003,7 +1066,9 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
             state["y_sur"],
             state["sigma_sur"],
             float(state["progress"][0]),
+            float(state["prev_action"][0]),
             float(state["prev_reward"][0]),
+            state["prev_ela"],
             state["lower_bound"],
             state["upper_bound"],
             action,
@@ -1014,7 +1079,9 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
             next_state["y_sur"],
             next_state["sigma_sur"],
             float(next_state["progress"][0]),
+            float(next_state["prev_action"][0]),
             float(next_state["prev_reward"][0]),
+            next_state["prev_ela"],
             float(done),
         ))
 

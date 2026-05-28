@@ -6,7 +6,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 import torch
@@ -1215,12 +1215,30 @@ def predict_multi_context(
     )
 
 
-from surrogate.gp import GPSurrogateModel, USEMO_GP_CONFIG, fit_gp_surrogates, predict_with_gp_mean, predict_with_gp_std
+if TYPE_CHECKING:
+    from surrogate.gp import GPSurrogateModel, USEMO_GP_CONFIG, fit_gp_surrogates, predict_with_gp_mean, predict_with_gp_std
 
 
 # Backwards/ergonomic aliases (requested names)
 surrogate_model = Surrogate
 SurrogateModel = Surrogate
-gp = GPSurrogateModel
 kan = KANSurrogateModel
 tabpfn = TabPFNSurrogateModel
+
+
+def __getattr__(name: str) -> Any:
+    if name in {
+        "GPSurrogateModel",
+        "USEMO_GP_CONFIG",
+        "fit_gp_surrogates",
+        "predict_with_gp_mean",
+        "predict_with_gp_std",
+    }:
+        from surrogate import gp as gp_module
+
+        return getattr(gp_module, name)
+    if name == "gp":
+        from surrogate.gp import GPSurrogateModel
+
+        return GPSurrogateModel
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

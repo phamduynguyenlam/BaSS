@@ -593,6 +593,21 @@ def build_offspring_sigma(
     return local_sigma.astype(np.float32)
 
 
+def build_archive_surrogate_stats(
+    *,
+    archive_x: np.ndarray,
+    archive_y: np.ndarray,
+    surrogate: Any,
+) -> tuple[np.ndarray, np.ndarray]:
+    archive_pred = predict_surrogate_mean(surrogate, archive_x)
+    archive_sigma = predict_surrogate_std(surrogate, archive_x)
+    if archive_sigma.ndim == 1:
+        archive_sigma = archive_sigma.reshape(-1, 1)
+    if archive_sigma.shape[1] != archive_y.shape[1]:
+        archive_sigma = np.repeat(archive_sigma.mean(axis=1, keepdims=True), archive_y.shape[1], axis=1)
+    return archive_pred.astype(np.float32), archive_sigma.astype(np.float32)
+
+
 def build_disc(
     args: argparse.Namespace,
     *,
@@ -734,7 +749,9 @@ def run_policy_rollout(
 
     prefix = f"[{policy_name}] " if compare_mode else ""
     logger(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
+    prev_action = np.array([np.nan], dtype=np.float32)
     prev_reward = np.array([np.nan], dtype=np.float32)
+    prev_ela = np.full((int(getattr(disc, "hidden_dim", getattr(args, "hidden_dim", 64))),), np.nan, dtype=np.float32)
 
     for step in range(n_evo_steps):
         offspring_x, offspring_pred, offspring_sigma, offspring_groups = generate_offspring_pool(
@@ -749,21 +766,30 @@ def run_policy_rollout(
             if disc is None:
                 raise ValueError("DISC rollout requires a built disc model.")
             progress = float(step) / float(max(n_evo_steps - 1, 1))
+            state_surrogate = build_surrogate(args, archive_x, archive_y)
+            archive_pred, archive_sigma = build_archive_surrogate_stats(
+                archive_x=archive_x,
+                archive_y=archive_y,
+                surrogate=state_surrogate,
+            )
             with torch.no_grad():
                 out = disc(
                     x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
                     y_true=torch.from_numpy(archive_y).to(device=args.device, dtype=torch.float32),
-                    x_sur=torch.from_numpy(offspring_x).to(device=args.device, dtype=torch.float32),
-                    y_sur=torch.from_numpy(offspring_pred).to(device=args.device, dtype=torch.float32),
-                    sigma_sur=torch.from_numpy(offspring_sigma).to(device=args.device, dtype=torch.float32),
+                    x_sur=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
+                    y_sur=torch.from_numpy(archive_pred).to(device=args.device, dtype=torch.float32),
+                    sigma_sur=torch.from_numpy(archive_sigma).to(device=args.device, dtype=torch.float32),
                     progress=progress,
+                    prev_action=prev_action,
                     prev_reward=prev_reward,
+                    prev_ela=prev_ela,
                     lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
                     upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
                     decode_type="epsilon_greedy",
                     epsilon=0.05,
                 )
                 action_idx = int(out["action"].reshape(-1)[0].item())
+                prev_ela = out["ela"].reshape(-1).detach().cpu().numpy().astype(np.float32)
             chosen_steps = int(Disc.action_to_surrogate_nsga_steps(action_idx))
             local_args = argparse.Namespace(**vars(args))
             local_args.surrogate_nsga_steps = chosen_steps
@@ -870,6 +896,7 @@ def run_policy_rollout(
         )
         history.append(record)
         step_rewards.append(step_reward)
+        prev_action = np.array([float(action_idx)], dtype=np.float32) if policy_name.lower() == "disc" else prev_action
         prev_reward = np.array([float(step_reward)], dtype=np.float32)
 
         logger(
