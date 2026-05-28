@@ -1,0 +1,8 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\BaSS\testing_logs\test_disc_zdt1_gp_seed0_20260528_180700.txt
+iter 0 | front = 14 | HV = 2.604352
+iter 1 | front = 1 | HV = 3.682352 | reward = 13.224126 | reward_components: reward_total=13.224126, prev_hv=2.604352, next_hv=3.682352, hv_gain=1.078000, hv_term=13.230227, fit_mse=0.000061, fit_term=-0.006101
+iter 2 | front = 2 | HV = 3.835799 | reward = 2.025745 | reward_components: reward_total=2.025745, prev_hv=3.682352, next_hv=3.835799, hv_gain=0.153447, hv_term=2.036667, fit_mse=0.000109, fit_term=-0.010922
+iter 3 | front = 2 | HV = 4.572206 | reward = 16.038133 | reward_components: reward_total=16.038133, prev_hv=3.835799, next_hv=4.572206, hv_gain=0.736407, hv_term=16.048655, fit_mse=0.000105, fit_term=-0.010522
+iter 4 | front = 3 | HV = 5.166869 | reward = 26.894385 | reward_components: reward_total=26.894385, prev_hv=4.572206, next_hv=5.166869, hv_gain=0.594662, hv_term=26.908516, fit_mse=0.000141, fit_term=-0.014131
+iter 5 | front = 4 | HV = 5.166946 | reward = -0.018357 | reward_components: reward_total=-0.018357, prev_hv=5.166869, next_hv=5.166946, hv_gain=0.000077, hv_term=0.003490, fit_mse=0.000218, fit_term=-0.021847
+iter 6 | front = 5 | HV = 5.166953 | reward = -0.018780 | reward_components: reward_total=-0.018780, prev_hv=5.166946, next_hv=5.166953, hv_gain=0.000007, hv_term=0.000303, fit_mse=0.000191, fit_term=-0.019083

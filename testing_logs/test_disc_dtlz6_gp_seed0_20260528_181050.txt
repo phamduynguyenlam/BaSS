@@ -1,0 +1,22 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\BaSS\testing_logs\test_disc_dtlz6_gp_seed0_20260528_181050.txt
+iter 0 | front = 63 | HV = 0.711916
+iter 1 | front = 62 | HV = 0.711916 | reward = -0.003654 | reward_components: reward_total=-0.003654, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000073, fit_term=-0.003654
+iter 2 | front = 57 | HV = 0.711916 | reward = -0.004711 | reward_components: reward_total=-0.004711, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000094, fit_term=-0.004711
+iter 3 | front = 50 | HV = 0.711916 | reward = -0.004907 | reward_components: reward_total=-0.004907, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000098, fit_term=-0.004907
+iter 4 | front = 48 | HV = 0.711916 | reward = -0.003655 | reward_components: reward_total=-0.003655, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000073, fit_term=-0.003655
+iter 5 | front = 49 | HV = 0.711916 | reward = -0.004068 | reward_components: reward_total=-0.004068, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000081, fit_term=-0.004068
+iter 6 | front = 44 | HV = 0.711916 | reward = -0.007011 | reward_components: reward_total=-0.007011, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000140, fit_term=-0.007011
+iter 7 | front = 45 | HV = 0.711916 | reward = -0.005349 | reward_components: reward_total=-0.005349, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000107, fit_term=-0.005349
+iter 8 | front = 45 | HV = 0.711916 | reward = -0.005148 | reward_components: reward_total=-0.005148, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000103, fit_term=-0.005148
+iter 9 | front = 44 | HV = 0.711916 | reward = -0.005398 | reward_components: reward_total=-0.005398, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000108, fit_term=-0.005398
+iter 10 | front = 44 | HV = 0.711916 | reward = -0.005485 | reward_components: reward_total=-0.005485, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000110, fit_term=-0.005485
+iter 11 | front = 44 | HV = 0.711916 | reward = -0.005560 | reward_components: reward_total=-0.005560, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000111, fit_term=-0.005560
+iter 12 | front = 45 | HV = 0.711916 | reward = -0.005525 | reward_components: reward_total=-0.005525, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000111, fit_term=-0.005525
+iter 13 | front = 46 | HV = 0.711916 | reward = -0.005671 | reward_components: reward_total=-0.005671, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000113, fit_term=-0.005671
+iter 14 | front = 45 | HV = 0.711916 | reward = -0.004252 | reward_components: reward_total=-0.004252, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000085, fit_term=-0.004252
+iter 15 | front = 43 | HV = 0.711916 | reward = -0.005397 | reward_components: reward_total=-0.005397, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000108, fit_term=-0.005397
+iter 16 | front = 44 | HV = 0.711916 | reward = -0.005349 | reward_components: reward_total=-0.005349, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000107, fit_term=-0.005349
+iter 17 | front = 45 | HV = 0.711916 | reward = -0.005191 | reward_components: reward_total=-0.005191, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000104, fit_term=-0.005191
+iter 18 | front = 43 | HV = 0.711916 | reward = -0.004809 | reward_components: reward_total=-0.004809, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000096, fit_term=-0.004809
+iter 19 | front = 44 | HV = 0.711916 | reward = -0.004703 | reward_components: reward_total=-0.004703, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000094, fit_term=-0.004703
+iter 20 | front = 44 | HV = 0.711916 | reward = -0.004715 | reward_components: reward_total=-0.004715, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000094, fit_term=-0.004715

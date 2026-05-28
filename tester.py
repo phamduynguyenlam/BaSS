@@ -30,6 +30,7 @@ from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point, get_true_pareto_hv
 from reward import (
+    archive_fit_mse_reward,
     hypervolume,
     pareto_front,
     reward_scheme_1,
@@ -130,6 +131,8 @@ def compute_test_reward(
     selected_objectives: np.ndarray,
     ref_point: np.ndarray,
     reward_lambda: float,
+    lambda1: float = 25.0,
+    lambda2: float = -50.0,
     true_pareto_hv: float | None = None,
     archive_true_y: np.ndarray | None = None,
     archive_pred_y: np.ndarray | None = None,
@@ -162,6 +165,8 @@ def compute_test_reward(
             true_pareto_hv=float(true_pareto_hv),
             archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
             archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
+            hv_lambda=float(lambda1),
+            fit_lambda=float(lambda2),
         )
         return float(breakdown["reward_total"]), breakdown
     raise ValueError(f"Unsupported reward_scheme_id for tester: {reward_scheme_id}")
@@ -187,6 +192,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random_model", action="store_true")
     parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
+    parser.add_argument("--lambda1", type=float, default=25.0)
+    parser.add_argument("--lambda2", type=float, default=-50.0)
     parser.add_argument("--kan_steps", type=int, default=25)
     parser.add_argument("--kan_hidden_width", type=int, default=10)
     parser.add_argument("--kan_grid", type=int, default=5)
@@ -222,6 +229,14 @@ def parse_args() -> argparse.Namespace:
 def set_seed(seed: int) -> None:
     np.random.seed(int(seed))
     torch.manual_seed(int(seed))
+
+
+def _format_debug_array(name: str, value: np.ndarray) -> str:
+    arr = np.asarray(value, dtype=np.float32)
+    return (
+        f"{name}.shape = {tuple(arr.shape)}\n"
+        f"{name} = {np.array2string(arr, precision=6, floatmode='fixed', threshold=arr.size + 1)}"
+    )
 
 
 def resolve_agent_cls(agent_name: str):
@@ -747,6 +762,28 @@ def run_policy_rollout(
 ) -> tuple[dict[str, Any], np.ndarray]:
     archive_x = np.asarray(archive_x_init, dtype=np.float32).copy()
     archive_y = np.asarray(archive_y_init, dtype=np.float32).copy()
+    init_count = int(archive_x.shape[0])
+    if init_count < 2:
+        raise ValueError(f"init_fe must be at least 2 to build gp_val/test_gp split, got {init_count}.")
+    rng = np.random.default_rng(int(args.seed))
+    perm = rng.permutation(init_count)
+    gp_val_train_size = min(64, max(init_count - 1, 1))
+    gp_val_train_idx = np.sort(perm[:gp_val_train_size])
+    test_gp_idx = np.sort(perm[gp_val_train_size:])
+    if test_gp_idx.size <= 0:
+        test_gp_idx = gp_val_train_idx[-1:].copy()
+        gp_val_train_idx = gp_val_train_idx[:-1]
+    gp_val_train_x = np.asarray(archive_x[gp_val_train_idx], dtype=np.float32).copy()
+    gp_val_train_y = np.asarray(archive_y[gp_val_train_idx], dtype=np.float32).copy()
+    test_gp_x = np.asarray(archive_x[test_gp_idx], dtype=np.float32).copy()
+    test_gp_y = np.asarray(archive_y[test_gp_idx], dtype=np.float32).copy()
+    gp_val = fit_gp_surrogates(
+        archive_x=np.asarray(gp_val_train_x, dtype=np.float32),
+        archive_y=np.asarray(gp_val_train_y, dtype=np.float32),
+        seed=int(args.seed) + 100_000,
+        nu=float(getattr(args, "gp_nu", 5.0)),
+        variant="gp",
+    )
     n_evo_steps = int(args.max_fe) - int(args.init_fe)
     fe_history = [int(args.init_fe)]
     hv_history = [float(hypervolume(archive_y, ref_point))]
@@ -872,16 +909,34 @@ def run_policy_rollout(
         previous_front = pareto_front(np.asarray(archive_y, dtype=np.float32))
         archive_x = np.vstack([archive_x, selected_x]).astype(np.float32)
         archive_y = np.vstack([archive_y, selected_true]).astype(np.float32)
+        gp_val_train_x = np.vstack([gp_val_train_x, selected_x]).astype(np.float32)
+        gp_val_train_y = np.vstack([gp_val_train_y, selected_true]).astype(np.float32)
         surrogate = build_surrogate(args, archive_x, archive_y)
-        archive_pred_y = predict_surrogate_mean(surrogate, archive_x)
+        gp_val = fit_gp_surrogates(
+            archive_x=np.asarray(gp_val_train_x, dtype=np.float32),
+            archive_y=np.asarray(gp_val_train_y, dtype=np.float32),
+            seed=int(args.seed) + 100_000 + int(step) + 1,
+            nu=float(getattr(args, "gp_nu", 5.0)),
+            variant="gp",
+        )
+        archive_pred_y = predict_surrogate_mean(gp_val, test_gp_x)
+        raw_mse = float(np.mean((np.asarray(test_gp_y, dtype=np.float32) - np.asarray(archive_pred_y, dtype=np.float32)) ** 2))
+        normalized_fit_mse = float(
+            archive_fit_mse_reward(
+                archive_true_y=np.asarray(test_gp_y, dtype=np.float32),
+                archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
+            )
+        )
         step_reward, reward_breakdown = compute_test_reward(
             reward_scheme_id=int(reward_scheme_id),
             previous_front=previous_front,
             selected_objectives=selected_true,
             ref_point=ref_point,
             reward_lambda=float(args.reward_lambda),
+            lambda1=float(args.lambda1),
+            lambda2=float(args.lambda2),
             true_pareto_hv=true_pareto_hv,
-            archive_true_y=archive_y,
+            archive_true_y=test_gp_y,
             archive_pred_y=archive_pred_y,
         )
         for comp_key, comp_value in reward_breakdown.items():
@@ -908,7 +963,9 @@ def run_policy_rollout(
         prev_action = np.array([float(action_idx)], dtype=np.float32) if policy_name.lower() == "disc" else prev_action
         prev_reward = np.array([float(step_reward)], dtype=np.float32)
         reward_component_str = ", ".join(
-            f"{comp_key}={comp_value:.6f}" for comp_key, comp_value in reward_breakdown.items()
+            f"{comp_key}={comp_value:.6f}"
+            for comp_key, comp_value in reward_breakdown.items()
+            if str(comp_key) != "remaining_gap"
         )
 
         logger(
@@ -916,6 +973,12 @@ def run_policy_rollout(
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f}"
             + (f" | reward_components: {reward_component_str}" if reward_component_str else "")
         )
+        if bool(getattr(args, "debug", False)):
+            logger(f"{prefix}debug iter {record.step} | raw_mse = {raw_mse:.10f} | normalized_fit_mse = {normalized_fit_mse:.10f}")
+            logger(_format_debug_array(f"{prefix}selected_true", selected_true))
+            logger(_format_debug_array(f"{prefix}selected_pred", selected_pred))
+            logger(_format_debug_array(f"{prefix}test_gp_true_y", test_gp_y))
+            logger(_format_debug_array(f"{prefix}test_gp_pred_y", archive_pred_y))
 
     final_front = pareto_front(archive_y)
     plot_path = None
@@ -948,6 +1011,8 @@ def run_policy_rollout(
         "candidate_solver": str(getattr(args, "solver", "nsga2")).lower(),
         "pseudo_front_only": bool(getattr(args, "pseudo_front_only", False)),
         "reward_lambda": float(args.reward_lambda),
+        "lambda1": float(args.lambda1),
+        "lambda2": float(args.lambda2),
         "reward_scheme": int(reward_scheme_id),
         "agent_name": args.agent_name,
         "policy_name": policy_name.lower(),
@@ -1269,7 +1334,10 @@ def main(agent_name: str = "disc") -> None:
             log(f"compare_algo = {compare_algo_name if compare_algo_name is not None else '-'}")
             log(f"agent_pth = {str(args.agent_pth) if args.agent_pth is not None else '-'}")
             log(f"compare_agent_pth = {str(args.compare_agent_pth) if getattr(args, 'compare_agent_pth', None) is not None else '-'}")
-            log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
+            log(
+                f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f} | "
+                f"lambda1 = {float(args.lambda1):.4f} | lambda2 = {float(args.lambda2):.4f}"
+            )
             log(f"model_to_device_sec = {float(agent_load_breakdown['model_to_device_sec']):.3f}")
             log(f"torch_load_sec = {float(agent_load_breakdown['torch_load_sec']):.3f}")
             log(f"load_state_dict_sec = {float(agent_load_breakdown['load_state_dict_sec']):.3f}")

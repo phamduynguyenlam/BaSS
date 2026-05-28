@@ -1,0 +1,6 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\BaSS\testing_logs\test_disc_dtlz4_gp_seed0_20260528_181013.txt
+iter 0 | front = 6 | HV = 5.695924
+iter 1 | front = 7 | HV = 5.695924 | reward = -5.185812 | reward_components: reward_total=-5.185812, prev_hv=5.695924, next_hv=5.695924, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.103716, fit_term=-5.185812
+iter 2 | front = 8 | HV = 5.695924 | reward = -5.357068 | reward_components: reward_total=-5.357068, prev_hv=5.695924, next_hv=5.695924, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.107141, fit_term=-5.357068
+iter 3 | front = 8 | HV = 5.695924 | reward = -4.591696 | reward_components: reward_total=-4.591696, prev_hv=5.695924, next_hv=5.695924, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.091834, fit_term=-4.591696
+iter 4 | front = 8 | HV = 5.695924 | reward = -4.297590 | reward_components: reward_total=-4.297590, prev_hv=5.695924, next_hv=5.695924, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.085952, fit_term=-4.297590

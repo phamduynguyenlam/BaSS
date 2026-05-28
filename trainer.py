@@ -74,7 +74,7 @@ class TrainConfig:
     reward_scheme: int = 3
     reward_lambda: float = 10.0
     reward_lambda1: float = 25.0
-    reward_lambda2: float = -1.0
+    reward_lambda2: float = -50.0
     policy_mode: str = "epsilon_greedy"
     training_set: int = 1
     heldout_problem: str = "ZDT1"
@@ -145,7 +145,7 @@ def parse_args():
     parser.add_argument("--reward_scheme", type=int, default=3, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--reward_lambda1", type=float, default=25.0)
-    parser.add_argument("--reward_lambda2", type=float, default=-1.0)
+    parser.add_argument("--reward_lambda2", type=float, default=-50.0)
     parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--num_workers", type=int, default=None)
@@ -748,7 +748,7 @@ def compute_env_reward(
     reward_scheme_id,
     reward_lambda=10.0,
     reward_lambda1=25.0,
-    reward_lambda2=-1.0,
+    reward_lambda2=-50.0,
     true_pareto_hv=None,
     archive_true_y=None,
     archive_pred_y=None,
@@ -848,9 +848,14 @@ class DiscSAEAEnv:
         self.init_hv = None
         self.true_pareto_hv = None
         self.surrogate = None
+        self.gp_val = None
         self._surrogate_dirty = False
         self.archive_pred = None
         self.archive_sigma = None
+        self.gp_val_train_x = None
+        self.gp_val_train_y = None
+        self.test_gp_x = None
+        self.test_gp_y = None
         self.prev_action = np.array([np.nan], dtype=np.float32)
         self.prev_reward = np.array([np.nan], dtype=np.float32)
         self.prev_ela = np.full((int(self.cfg["hidden_dim"]),), np.nan, dtype=np.float32)
@@ -887,6 +892,18 @@ class DiscSAEAEnv:
         if self.surrogate is None or bool(self._surrogate_dirty):
             self._fit_surrogate()
         return self.surrogate
+
+    def _fit_gp_val(self):
+        if self.gp_val_train_x is None or self.gp_val_train_y is None:
+            raise RuntimeError("gp_val train set is not initialized.")
+        self.gp_val = fit_gp_surrogates(
+            archive_x=np.asarray(self.gp_val_train_x, dtype=np.float32),
+            archive_y=np.asarray(self.gp_val_train_y, dtype=np.float32),
+            seed=int(self.seed) + 100_000 + int(self.t),
+            nu=5.0,
+            variant="gp",
+        )
+        return self.gp_val
 
     def _refresh_archive_surrogate_stats(self):
         surrogate = self._ensure_surrogate_ready()
@@ -957,6 +974,21 @@ class DiscSAEAEnv:
             seed=self.seed,
         )
         self.archive_y = np.asarray(self.problem.evaluate(self.archive_x), dtype=np.float32)
+        init_count = int(self.archive_x.shape[0])
+        if init_count < 2:
+            raise ValueError(f"init_size must be at least 2 to build gp_val/test_gp split, got {init_count}.")
+        rng = np.random.default_rng(int(self.seed))
+        perm = rng.permutation(init_count)
+        gp_val_train_size = min(64, max(init_count - 1, 1))
+        gp_val_train_idx = np.sort(perm[:gp_val_train_size])
+        test_gp_idx = np.sort(perm[gp_val_train_size:])
+        if test_gp_idx.size <= 0:
+            test_gp_idx = gp_val_train_idx[-1:].copy()
+            gp_val_train_idx = gp_val_train_idx[:-1]
+        self.gp_val_train_x = np.asarray(self.archive_x[gp_val_train_idx], dtype=np.float32).copy()
+        self.gp_val_train_y = np.asarray(self.archive_y[gp_val_train_idx], dtype=np.float32).copy()
+        self.test_gp_x = np.asarray(self.archive_x[test_gp_idx], dtype=np.float32).copy()
+        self.test_gp_y = np.asarray(self.archive_y[test_gp_idx], dtype=np.float32).copy()
         self.ref_point = np.asarray(
             get_reference_point(self.problem_name, n_obj=int(self.archive_y.shape[1])),
             dtype=np.float32,
@@ -971,6 +1003,7 @@ class DiscSAEAEnv:
         self.nsga2_problem = make_nsga2_problem_adapter(self.problem, int(self.archive_y.shape[1]))
         # Pretrain surrogate on the initial archive (default: 80 points), then generate first offspring pool.
         self._fit_surrogate()
+        self._fit_gp_val()
         self._refresh_archive_surrogate_stats()
         self._refresh_offspring()
         return self._build_state()
@@ -989,13 +1022,16 @@ class DiscSAEAEnv:
 
         self.archive_x = np.vstack([self.archive_x, chosen_x]).astype(np.float32)
         self.archive_y = np.vstack([self.archive_y, chosen_y]).astype(np.float32)
+        self.gp_val_train_x = np.vstack([self.gp_val_train_x, chosen_x]).astype(np.float32)
+        self.gp_val_train_y = np.vstack([self.gp_val_train_y, chosen_y]).astype(np.float32)
 
         archive_pred_y = None
         if int(self.cfg["reward_scheme"]) == 3:
             fitted_surrogate = self._fit_surrogate()
             if fitted_surrogate is None:
                 raise RuntimeError("reward_scheme_3 requires a fitted surrogate after archive update.")
-            archive_pred_y = predict_surrogate_mean(fitted_surrogate, self.archive_x)
+            self._fit_gp_val()
+            archive_pred_y = predict_surrogate_mean(self.gp_val, self.test_gp_x)
 
         reward, reward_breakdown = compute_env_reward(
             previous_archive_y=previous_archive_y,
@@ -1004,9 +1040,9 @@ class DiscSAEAEnv:
             reward_scheme_id=int(self.cfg["reward_scheme"]),
             reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
             reward_lambda1=float(self.cfg.get("reward_lambda1", 25.0)),
-            reward_lambda2=float(self.cfg.get("reward_lambda2", -1.0)),
+            reward_lambda2=float(self.cfg.get("reward_lambda2", -50.0)),
             true_pareto_hv=self.true_pareto_hv,
-            archive_true_y=self.archive_y,
+            archive_true_y=self.test_gp_y,
             archive_pred_y=archive_pred_y,
             return_breakdown=True,
         )
@@ -1218,7 +1254,7 @@ def train_disc_ddqn_ray(
     reward_scheme=3,
     reward_lambda=10.0,
     reward_lambda1=25.0,
-    reward_lambda2=-1.0,
+    reward_lambda2=-50.0,
     surrogate_model="gp",
     training_set=1,
     num_workers=None,
