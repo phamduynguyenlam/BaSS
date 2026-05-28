@@ -19,7 +19,16 @@ from agents.meta import Disc, DiscAF
 from solver.nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
-from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
+from reward import (
+    hypervolume,
+    pareto_front,
+    reward_scheme_1,
+    reward_scheme_1_breakdown,
+    reward_scheme_2,
+    reward_scheme_2_breakdown,
+    reward_scheme_3,
+    reward_scheme_3_breakdown,
+)
 from surrogate.gp import fit_gp_surrogates
 from surrogate.surrogate_model import (
     estimate_uncertainty,
@@ -55,7 +64,7 @@ class TrainConfig:
     ff_dim: int = 256
     dropout: float = 0.0
     logit_scale: float = 1.0
-    surrogate_model: str = "kan"
+    surrogate_model: str = "gp"
     surrogate_nsga_steps: int = 100
     hybrid_nsga: bool = False
     offspring_size: int = 80
@@ -133,7 +142,7 @@ def parse_args():
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=3, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
-    parser.add_argument("--surrogate_model", type=str, default="kan", choices=["gp", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
@@ -737,43 +746,41 @@ def compute_env_reward(
     true_pareto_hv=None,
     archive_true_y=None,
     archive_pred_y=None,
+    return_breakdown=False,
 ):
     previous_front = pareto_front(np.asarray(previous_archive_y, dtype=np.float32))
     selected_y = np.asarray(selected_y, dtype=np.float32)
 
     if int(reward_scheme_id) == 1:
-        return float(
-            reward_scheme_1(
-                previous_front=previous_front,
-                selected_objectives=selected_y,
-                ref_point=ref_point,
-                reward_lambda=float(reward_lambda),
-            )
+        breakdown = reward_scheme_1_breakdown(
+            previous_front=previous_front,
+            selected_objectives=selected_y,
+            ref_point=ref_point,
+            reward_lambda=float(reward_lambda),
         )
+        return (float(breakdown["reward_total"]), breakdown) if return_breakdown else float(breakdown["reward_total"])
     if int(reward_scheme_id) == 2:
-        return float(
-            reward_scheme_2(
-                previous_front=previous_front,
-                selected_objectives=selected_y,
-                ref_point=ref_point,
-                reward_lambda=float(reward_lambda),
-            )
+        breakdown = reward_scheme_2_breakdown(
+            previous_front=previous_front,
+            selected_objectives=selected_y,
+            ref_point=ref_point,
+            reward_lambda=float(reward_lambda),
         )
+        return (float(breakdown["reward_total"]), breakdown) if return_breakdown else float(breakdown["reward_total"])
     if int(reward_scheme_id) == 3:
         if true_pareto_hv is None:
             raise ValueError("reward_scheme_3 requires true_pareto_hv.")
         if archive_true_y is None or archive_pred_y is None:
             raise ValueError("reward_scheme_3 requires archive_true_y and archive_pred_y.")
-        return float(
-            reward_scheme_3(
-                previous_front=previous_front,
-                selected_objectives=selected_y,
-                ref_point=ref_point,
-                true_pareto_hv=float(true_pareto_hv),
-                archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
-                archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
-            )
+        breakdown = reward_scheme_3_breakdown(
+            previous_front=previous_front,
+            selected_objectives=selected_y,
+            ref_point=ref_point,
+            true_pareto_hv=float(true_pareto_hv),
+            archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
+            archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
         )
+        return (float(breakdown["reward_total"]), breakdown) if return_breakdown else float(breakdown["reward_total"])
     raise ValueError(f"Unsupported reward_scheme: {reward_scheme_id}")
 
 
@@ -840,6 +847,7 @@ class DiscSAEAEnv:
         self.prev_reward = np.array([np.nan], dtype=np.float32)
         self.prev_ela = np.full((int(self.cfg["hidden_dim"]),), np.nan, dtype=np.float32)
         self.active_surrogate_nsga_steps = int(self.cfg["surrogate_nsga_steps"])
+        self.last_reward_breakdown: dict[str, float] = {}
 
     def _progress(self):
         return float(self.t) / float(max(self.max_steps - 1, 1))
@@ -981,7 +989,7 @@ class DiscSAEAEnv:
                 raise RuntimeError("reward_scheme_3 requires a fitted surrogate after archive update.")
             archive_pred_y = predict_surrogate_mean(fitted_surrogate, self.archive_x)
 
-        reward = compute_env_reward(
+        reward, reward_breakdown = compute_env_reward(
             previous_archive_y=previous_archive_y,
             selected_y=chosen_y,
             ref_point=self.ref_point,
@@ -990,7 +998,9 @@ class DiscSAEAEnv:
             true_pareto_hv=self.true_pareto_hv,
             archive_true_y=self.archive_y,
             archive_pred_y=archive_pred_y,
+            return_breakdown=True,
         )
+        self.last_reward_breakdown = dict(reward_breakdown)
 
         self.t += 1
         self.prev_reward = np.array([float(reward)], dtype=np.float32)
@@ -1034,6 +1044,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
     total_reward = 0.0
     init_hv = float(env.init_hv)
     transitions = []
+    reward_component_history: dict[str, list[float]] = {}
 
     done = False
     while not done:
@@ -1058,6 +1069,8 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
         state_for_step = dict(state)
         state_for_step["current_ela"] = out["ela"].reshape(-1).detach().cpu().numpy().astype(np.float32)
         next_state, reward, done = env.step(action, state_for_step)
+        for key, value in env.last_reward_breakdown.items():
+            reward_component_history.setdefault(str(key), []).append(float(value))
 
         transitions.append((
             state["x_true"],
@@ -1093,6 +1106,9 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
         "transitions": transitions,
         "episode_reward": float(total_reward),
         "episode_steps": int(len(transitions)),
+        "reward_components_mean": {
+            key: float(np.mean(values)) for key, values in reward_component_history.items() if len(values) > 0
+        },
         "env_key": env_key(problem_name, dim),
         "init_hv": init_hv,
         "final_hv": float(env.current_hv()),
@@ -1191,7 +1207,7 @@ def train_disc_ddqn_ray(
     gamma=None,
     reward_scheme=3,
     reward_lambda=10.0,
-    surrogate_model="kan",
+    surrogate_model="gp",
     training_set=1,
     num_workers=None,
     surrogate_nsga_steps=100,
@@ -1411,6 +1427,7 @@ def train_disc_ddqn_ray(
                     "reward_per_fe": [],
                     "init_hv": [],
                     "final_hv": [],
+                    "reward_components": {},
                 },
             )
             ep_reward = float(result["episode_reward"])
@@ -1419,6 +1436,8 @@ def train_disc_ddqn_ray(
             bucket["reward_per_fe"].append(ep_reward / float(ep_steps))
             bucket["init_hv"].append(float(result["init_hv"]))
             bucket["final_hv"].append(float(result["final_hv"]))
+            for comp_key, comp_value in dict(result.get("reward_components_mean", {})).items():
+                bucket["reward_components"].setdefault(str(comp_key), []).append(float(comp_value))
         per_env_summaries = {}
         for key, stats in sorted(per_env_stats.items()):
             if len(stats["rewards"]) == 0:
@@ -1428,6 +1447,11 @@ def train_disc_ddqn_ray(
                 "mean_reward_per_fe": float(np.mean(stats["reward_per_fe"])),
                 "init_hv": float(np.mean(stats["init_hv"])),
                 "final_hv": float(np.mean(stats["final_hv"])),
+                "reward_components": {
+                    comp_key: float(np.mean(comp_values))
+                    for comp_key, comp_values in sorted(stats["reward_components"].items())
+                    if len(comp_values) > 0
+                },
             }
         mean_ep_reward = (
             float(np.mean([v["mean_reward_per_fe"] for v in per_env_summaries.values()]))
@@ -1435,11 +1459,15 @@ def train_disc_ddqn_ray(
             else 0.0
         )
         for key, stats in per_env_summaries.items():
+            reward_component_str = ", ".join(
+                f"{comp_key}={comp_value:.4f}" for comp_key, comp_value in stats["reward_components"].items()
+            )
             log(
                 f"{key} epoch {epoch} done, "
                 f"mean reward/FE = {stats['mean_reward_per_fe']:.4f}, "
                 f"init HV = {stats['init_hv']:.6f}, "
                 f"final HV = {stats['final_hv']:.6f}"
+                + (f" | reward_components: {reward_component_str}" if reward_component_str else "")
             )
         update_start_time = time.perf_counter()
 

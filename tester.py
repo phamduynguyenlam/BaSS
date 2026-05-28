@@ -29,7 +29,16 @@ from solver.moead_solver import run_surrogate_moead
 from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point, get_true_pareto_hv
-from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
+from reward import (
+    hypervolume,
+    pareto_front,
+    reward_scheme_1,
+    reward_scheme_1_breakdown,
+    reward_scheme_2,
+    reward_scheme_2_breakdown,
+    reward_scheme_3,
+    reward_scheme_3_breakdown,
+)
 from surrogate.gp import fit_gp_surrogates
 from surrogate.surrogate_model import (
     estimate_uncertainty,
@@ -124,40 +133,37 @@ def compute_test_reward(
     true_pareto_hv: float | None = None,
     archive_true_y: np.ndarray | None = None,
     archive_pred_y: np.ndarray | None = None,
-) -> float:
+) -> float | tuple[float, dict[str, float]]:
     if int(reward_scheme_id) == 1:
-        return float(
-            reward_scheme_1(
-                previous_front=previous_front,
-                selected_objectives=selected_objectives,
-                ref_point=ref_point,
-                reward_lambda=float(reward_lambda),
-            )
+        breakdown = reward_scheme_1_breakdown(
+            previous_front=previous_front,
+            selected_objectives=selected_objectives,
+            ref_point=ref_point,
+            reward_lambda=float(reward_lambda),
         )
+        return float(breakdown["reward_total"]), breakdown
     if int(reward_scheme_id) == 2:
-        return float(
-            reward_scheme_2(
-                previous_front=previous_front,
-                selected_objectives=selected_objectives,
-                ref_point=ref_point,
-                reward_lambda=float(reward_lambda),
-            )
+        breakdown = reward_scheme_2_breakdown(
+            previous_front=previous_front,
+            selected_objectives=selected_objectives,
+            ref_point=ref_point,
+            reward_lambda=float(reward_lambda),
         )
+        return float(breakdown["reward_total"]), breakdown
     if int(reward_scheme_id) == 3:
         if true_pareto_hv is None:
             raise ValueError("reward_scheme_3 requires true_pareto_hv in tester.")
         if archive_true_y is None or archive_pred_y is None:
             raise ValueError("reward_scheme_3 requires archive_true_y and archive_pred_y in tester.")
-        return float(
-            reward_scheme_3(
-                previous_front=previous_front,
-                selected_objectives=selected_objectives,
-                ref_point=ref_point,
-                true_pareto_hv=float(true_pareto_hv),
-                archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
-                archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
-            )
+        breakdown = reward_scheme_3_breakdown(
+            previous_front=previous_front,
+            selected_objectives=selected_objectives,
+            ref_point=ref_point,
+            true_pareto_hv=float(true_pareto_hv),
+            archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
+            archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
         )
+        return float(breakdown["reward_total"]), breakdown
     raise ValueError(f"Unsupported reward_scheme_id for tester: {reward_scheme_id}")
 
 
@@ -746,6 +752,7 @@ def run_policy_rollout(
     hv_history = [float(hypervolume(archive_y, ref_point))]
     history: list[StepRecord] = []
     step_rewards: list[float] = []
+    reward_component_history: dict[str, list[float]] = {}
 
     prefix = f"[{policy_name}] " if compare_mode else ""
     logger(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
@@ -867,7 +874,7 @@ def run_policy_rollout(
         archive_y = np.vstack([archive_y, selected_true]).astype(np.float32)
         surrogate = build_surrogate(args, archive_x, archive_y)
         archive_pred_y = predict_surrogate_mean(surrogate, archive_x)
-        step_reward = compute_test_reward(
+        step_reward, reward_breakdown = compute_test_reward(
             reward_scheme_id=int(reward_scheme_id),
             previous_front=previous_front,
             selected_objectives=selected_true,
@@ -877,6 +884,8 @@ def run_policy_rollout(
             archive_true_y=archive_y,
             archive_pred_y=archive_pred_y,
         )
+        for comp_key, comp_value in reward_breakdown.items():
+            reward_component_history.setdefault(str(comp_key), []).append(float(comp_value))
         hv = hypervolume(archive_y, ref_point)
         fe = int(args.init_fe) + step + 1
         front_size = int(pareto_front(archive_y).shape[0])
@@ -898,10 +907,14 @@ def run_policy_rollout(
         step_rewards.append(step_reward)
         prev_action = np.array([float(action_idx)], dtype=np.float32) if policy_name.lower() == "disc" else prev_action
         prev_reward = np.array([float(step_reward)], dtype=np.float32)
+        reward_component_str = ", ".join(
+            f"{comp_key}={comp_value:.6f}" for comp_key, comp_value in reward_breakdown.items()
+        )
 
         logger(
             f"{prefix}iter {record.step} | front = {front_size} | "
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f}"
+            + (f" | reward_components: {reward_component_str}" if reward_component_str else "")
         )
 
     final_front = pareto_front(archive_y)
@@ -944,6 +957,11 @@ def run_policy_rollout(
         "archive_size": int(archive_x.shape[0]),
         "final_hv": float(hypervolume(archive_y, ref_point)),
         "mean_reward_40_steps": float(np.mean(step_rewards)) if len(step_rewards) > 0 else 0.0,
+        "mean_reward_components": {
+            comp_key: float(np.mean(comp_values))
+            for comp_key, comp_values in sorted(reward_component_history.items())
+            if len(comp_values) > 0
+        },
         "final_front_size": int(final_front.shape[0]),
         "final_front": final_front.astype(float).tolist(),
         "plot_path": plot_path,

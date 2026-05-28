@@ -212,7 +212,7 @@ def reward_scheme_3(
     archive_true_y: np.ndarray,
     archive_pred_y: np.ndarray,
     hv_lambda: float = 25.0,
-    fit_lambda: float = 0.1,
+    fit_lambda: float = -1.0,
     hv_epsilon: float = 1e-8,
 ) -> float:
     """Reward = hv_lambda * normalized HV gain + fit_lambda * archive fit MSE after surrogate refit."""
@@ -232,3 +232,134 @@ def reward_scheme_3(
         archive_pred_y=archive_pred_y,
     )
     return float(hv_term + fit_term)
+
+
+def reward_scheme_1_breakdown(
+    *,
+    previous_front: np.ndarray,
+    selected_objectives: np.ndarray,
+    ref_point: np.ndarray,
+    reward_lambda: float = 10.0,
+) -> dict[str, float]:
+    del ref_point
+    previous_front = pareto_front(np.asarray(previous_front, dtype=np.float32))
+    selected_objectives = np.asarray(selected_objectives, dtype=np.float32)
+    combined_front = pareto_front(np.vstack([previous_front, selected_objectives]))
+    front_members = _filter_candidates_on_front(selected_objectives, combined_front)
+    if front_members.shape[0] == 0:
+        return {
+            "reward_total": -1.0,
+            "front_count": 0.0,
+            "distance_raw": 0.0,
+            "distance_term": -1.0,
+        }
+
+    if previous_front.size == 0:
+        reward_total = float(max(1e-6, 1.0 + float(reward_lambda) * float(front_members.shape[0])))
+        return {
+            "reward_total": reward_total,
+            "front_count": float(front_members.shape[0]),
+            "distance_raw": float(front_members.shape[0]),
+            "distance_term": reward_total - 1.0,
+        }
+
+    reward = 0.0
+    origin = np.zeros(previous_front.shape[1], dtype=np.float32)
+    for candidate in front_members:
+        distances = np.abs(previous_front - candidate).sum(axis=1)
+        nearest_idx = int(np.argmin(distances))
+        d_i = float(distances[nearest_idx])
+        d_ref_i = float(np.abs(previous_front[nearest_idx] - origin).sum())
+        reward += d_i / max(d_ref_i, 1e-12)
+    return {
+        "reward_total": float(max(1e-6, 1.0 + float(reward_lambda) * reward)),
+        "front_count": float(front_members.shape[0]),
+        "distance_raw": float(reward),
+        "distance_term": float(float(reward_lambda) * reward),
+    }
+
+
+def reward_scheme_2_breakdown(
+    *,
+    previous_front: np.ndarray,
+    selected_objectives: np.ndarray,
+    ref_point: np.ndarray,
+    reward_lambda: float = 10.0,
+) -> dict[str, float]:
+    del ref_point
+    previous_front = pareto_front(np.asarray(previous_front, dtype=np.float32))
+    selected_objectives = np.asarray(selected_objectives, dtype=np.float32)
+    combined_front = pareto_front(np.vstack([previous_front, selected_objectives]))
+    front_members = _filter_candidates_on_front(selected_objectives, combined_front)
+    if front_members.shape[0] == 0:
+        return {
+            "reward_total": 0.0,
+            "front_count": 0.0,
+            "distance_raw": 0.0,
+            "distance_term": 0.0,
+        }
+
+    if previous_front.size == 0:
+        reward_total = float(max(1e-6, float(reward_lambda) * float(front_members.shape[0])))
+        return {
+            "reward_total": reward_total,
+            "front_count": float(front_members.shape[0]),
+            "distance_raw": float(front_members.shape[0]),
+            "distance_term": reward_total,
+        }
+
+    reward = 0.0
+    origin = np.zeros(previous_front.shape[1], dtype=np.float32)
+    for candidate in front_members:
+        distances = np.abs(previous_front - candidate).sum(axis=1)
+        nearest_idx = int(np.argmin(distances))
+        d_i = float(distances[nearest_idx])
+        d_ref_i = float(np.abs(previous_front[nearest_idx] - origin).sum())
+        reward += d_i / max(d_ref_i, 1e-12)
+    return {
+        "reward_total": float(max(1e-6, float(reward_lambda) * reward)),
+        "front_count": float(front_members.shape[0]),
+        "distance_raw": float(reward),
+        "distance_term": float(float(reward_lambda) * reward),
+    }
+
+
+def reward_scheme_3_breakdown(
+    *,
+    previous_front: np.ndarray,
+    selected_objectives: np.ndarray,
+    ref_point: np.ndarray,
+    true_pareto_hv: float,
+    archive_true_y: np.ndarray,
+    archive_pred_y: np.ndarray,
+    hv_lambda: float = 25.0,
+    fit_lambda: float = -1.0,
+    hv_epsilon: float = 1e-8,
+) -> dict[str, float]:
+    previous_front = np.asarray(previous_front, dtype=np.float32)
+    selected_objectives = np.asarray(selected_objectives, dtype=np.float32)
+    combined_front = np.vstack([previous_front, selected_objectives])
+
+    prev_hv = hypervolume(previous_front, ref_point)
+    next_hv = hypervolume(combined_front, ref_point)
+    hv_gain = max(float(next_hv) - float(prev_hv), 0.0)
+    remaining_gap = max(float(true_pareto_hv) - float(next_hv), float(hv_epsilon))
+    hv_term = 0.0
+    if next_hv > prev_hv:
+        hv_term = float(hv_lambda) * hv_gain / remaining_gap
+
+    fit_mse = archive_fit_mse_reward(
+        archive_true_y=archive_true_y,
+        archive_pred_y=archive_pred_y,
+    )
+    fit_term = float(fit_lambda) * fit_mse
+    return {
+        "reward_total": float(hv_term + fit_term),
+        "prev_hv": float(prev_hv),
+        "next_hv": float(next_hv),
+        "hv_gain": float(hv_gain),
+        "remaining_gap": float(remaining_gap),
+        "hv_term": float(hv_term),
+        "fit_mse": float(fit_mse),
+        "fit_term": float(fit_term),
+    }
