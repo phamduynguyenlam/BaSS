@@ -107,10 +107,10 @@ def build_compare_infill_criterion(name: str, *, ref_point: np.ndarray):
 def resolve_test_reward_scheme(args: argparse.Namespace) -> int:
     agent_pth = getattr(args, "agent_pth", None)
     if not agent_pth:
-        return 1
+        return 3
     match = re.search(r"rs([123])", Path(str(agent_pth)).name.lower())
     if match is None:
-        return 1
+        return 3
     return int(match.group(1))
 
 
@@ -736,7 +736,7 @@ def run_policy_rollout(
     compare_mode: bool = False,
     make_plot: bool = True,
     logger=print,
-    reward_scheme_id: int = 1,
+    reward_scheme_id: int = 3,
     true_pareto_hv: float | None = None,
 ) -> tuple[dict[str, Any], np.ndarray]:
     archive_x = np.asarray(archive_x_init, dtype=np.float32).copy()

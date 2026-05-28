@@ -1,8 +1,0 @@
-test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz2_gp_seed0_20260528_121520.txt
-reference_point = [2.8389999866485596, 2.901099920272827, 2.8575000762939453] (from ref_points_hv.py)
-candidate_solver = nsga2
-nsga_af = mean | beta = 1.0000
-lhs_sample_sec = 0.000
-pseudo_front_only = 0
-compare_infill = -
-reward_scheme = rs1 | reward_lambda = 10.0000

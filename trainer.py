@@ -62,12 +62,12 @@ class TrainConfig:
     kan_steps: int = 25
     kan_hidden_width: int = 10
     kan_grid: int = 5
-    reward_scheme: int = 1
+    reward_scheme: int = 3
     reward_lambda: float = 10.0
     policy_mode: str = "epsilon_greedy"
     training_set: int = 1
     heldout_problem: str = "ZDT1"
-    weight_dir: str = "weight"
+    weight_dir: str = "weights"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     rollout_device: str = "cpu"
     surrogate_device: str = "cpu"
@@ -131,7 +131,7 @@ def parse_args():
     parser.add_argument("--dim", type=int, default=30)
     parser.add_argument("--epoch", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=None)
-    parser.add_argument("--reward_scheme", type=int, default=1, choices=[1, 2, 3])
+    parser.add_argument("--reward_scheme", type=int, default=3, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--surrogate_model", type=str, default="kan", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
@@ -1189,7 +1189,7 @@ def train_disc_ddqn_ray(
     dim=30,
     epoch=None,
     gamma=None,
-    reward_scheme=1,
+    reward_scheme=3,
     reward_lambda=10.0,
     surrogate_model="kan",
     training_set=1,

@@ -1,2 +1,0 @@
-Training config | heldout=ZDT1 | training_set=1 | envs=24 | workers=24 | reward_scheme=1 | policy=epsilon_greedy | surrogate=tabpfn | sampling_backend=process_pool | sur_steps=15 | updates_per_epoch=80 | train_device=cuda | rollout_device=cpu | surrogate_device=cuda | lr=1.0e-04 | batch_size=64 | replay_size=50000 | gamma=1.0000 | target_update=20 | log_path=training_logs\trainer_zdt1_set1_20260514_113412.txt
-[Epoch 0001] start | set=1 | heldout=ZDT1 | envs_active=24/24 | surrogate=tabpfn | sur_steps=15 | eps=0.300

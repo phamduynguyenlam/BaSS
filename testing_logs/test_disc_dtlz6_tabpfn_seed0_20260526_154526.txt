@@ -1,1 +1,0 @@
-test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz6_tabpfn_seed0_20260526_154526.txt
