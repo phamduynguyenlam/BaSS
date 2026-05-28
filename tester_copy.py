@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from agents.disc import Disc
+from agents.meta import Disc
 from infill import (
     EPDIExploitation,
     EPDIExploration,
@@ -25,17 +25,17 @@ from infill import (
 )
 from solver.nsga2_solver import run_surrogate_nsga2
 from solver.nsga3_solver import run_surrogate_nsga3
+from solver.moead_solver import run_surrogate_moead
 from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
-from ref_points_hv import get_reference_point
+from ref_points_hv import get_reference_point, get_true_pareto_hv
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
+from surrogate.gp import fit_gp_surrogates
 from surrogate.surrogate_model import (
     TabPFNMinMaxSurrogate,
     _apply_balanced_softmax_probs,
     _get_tabpfn_ensemble_members,
     estimate_uncertainty,
-    fit_gp2_surrogates,
-    fit_gp_surrogates,
     fit_kan_surrogates,
     fit_tabpfn_surrogate,
     KANSurrogateModel,
@@ -170,12 +170,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_fe", type=int, default=120)
     parser.add_argument("--init_fe", type=int, default=80)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
+    parser.add_argument("--increase_steps", type=int, default=3)
     parser.add_argument("--offspring_size", type=int, default=80)
     parser.add_argument("--mutation_sigma", type=float, default=0.12)
     parser.add_argument("--logit_scale", type=float, default=5.0)
     parser.add_argument("--agent_pth", type=str, default=None)
     parser.add_argument("--random_model", action="store_true")
-    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "gp2", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--kan_steps", type=int, default=25)
@@ -189,7 +190,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nsga_af", type=str, default="mean", choices=["mean", "lcb", "ei"])
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--compare_infill", type=str, default=None)
-    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "usemo"])
+    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "moead", "usemo"])
     parser.add_argument("--pseudo_front_only", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
@@ -247,13 +248,26 @@ def build_surrogate(
             archive_y=archive_y,
             seed=int(args.seed),
             nu=float(getattr(args, "gp_nu", 5.0)),
+            variant="gp",
         )
 
     if name == "gp2":
-        return fit_gp2_surrogates(
+        return fit_gp_surrogates(
             archive_x=archive_x,
             archive_y=archive_y,
             seed=int(args.seed),
+            variant="gp2",
+        )
+
+    if name == "gp3":
+        return fit_gp_surrogates(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            variant="gp3",
+            xl=np.min(np.asarray(archive_x, dtype=np.float32), axis=0),
+            xu=np.max(np.asarray(archive_x, dtype=np.float32), axis=0),
+            seed=int(args.seed),
+            nu=float(getattr(args, "gp3_nu", 2.5)),
         )
 
     if name == "tabpfn":
@@ -357,6 +371,7 @@ def run_surrogate_optimizer(
     nsga2_surrogate: Any | None,
     nsga2_models: list[Any] | None,
     step: int,
+    surrogate_nsga_steps: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     solver_name = str(getattr(args, "solver", "nsga2")).lower()
     if solver_name == "nsga2":
@@ -366,7 +381,7 @@ def run_surrogate_optimizer(
             problem=nsga_problem,
             archive_x=archive_x,
             pop_size=int(args.offspring_size),
-            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            surrogate_nsga_steps=int(surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
         )
     if solver_name == "nsga3":
@@ -376,7 +391,17 @@ def run_surrogate_optimizer(
             problem=nsga_problem,
             archive_x=archive_x,
             pop_size=int(args.offspring_size),
-            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            surrogate_nsga_steps=int(surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+        )
+    if solver_name == "moead":
+        return run_surrogate_moead(
+            gps=nsga2_models,
+            surrogate=nsga2_surrogate,
+            problem=nsga_problem,
+            archive_x=archive_x,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
         )
     if solver_name == "usemo":
@@ -385,10 +410,12 @@ def run_surrogate_optimizer(
             archive_x=archive_x,
             archive_y=archive_y,
             pop_size=int(args.offspring_size),
-            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            surrogate_nsga_steps=args,
             seed=int(args.seed) + int(step),
             acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
+            surrogate_model=args,
+            device=args,
         )
         return offspring_x, offspring_pred
     raise ValueError(f"Unsupported solver: {solver_name}")
@@ -1015,6 +1042,7 @@ def run_policy_rollout(
     surrogate = build_surrogate(args, archive_x, archive_y)
     surrogate_needs_refit = False
     for step in range(n_evo_steps):
+        current_surrogate_nsga_steps = 10 if int(step) < 10 else 100
         if surrogate_needs_refit:
             reuse_surrogate = surrogate if isinstance(surrogate, TabPFNMinMaxSurrogate) else None
             surrogate = build_surrogate(args, archive_x, archive_y, existing_surrogate=reuse_surrogate)
@@ -1026,10 +1054,12 @@ def run_policy_rollout(
                 archive_x=archive_x,
                 archive_y=archive_y,
                 pop_size=int(args.offspring_size),
-                surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+                surrogate_nsga_steps={**vars(args), "surrogate_nsga_steps": int(current_surrogate_nsga_steps)},
                 seed=int(args.seed) + int(step),
                 acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
                 beta=float(getattr(args, "beta", 1.0)),
+                surrogate_model=args,
+                device=args,
             )
             offspring_x = np.asarray(offspring_x, dtype=np.float32)
             offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
@@ -1044,6 +1074,7 @@ def run_policy_rollout(
                 nsga2_surrogate=nsga2_surrogate,
                 nsga2_models=nsga2_models,
                 step=step,
+                surrogate_nsga_steps=int(current_surrogate_nsga_steps),
             )
             offspring_x = np.asarray(offspring_x, dtype=np.float32)
             offspring_pred = np.asarray(offspring_pred, dtype=np.float32)
@@ -1133,7 +1164,8 @@ def run_policy_rollout(
         logger(
             f"{prefix}iter {record.step} | front = {front_size} | "
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f} | "
-            f"{selection_label} = {selection_sec:.3f}"
+            f"{selection_label} = {selection_sec:.3f} | "
+            f"surrogate_nsga_steps = {int(current_surrogate_nsga_steps)}"
         )
         surrogate_needs_refit = True
 
@@ -1217,7 +1249,9 @@ def main() -> None:
         ref_point = get_reference_point(args.problem, n_obj=n_obj)
         nsga2_problem = make_nsga2_problem_adapter(problem, n_obj)
         true_pareto = load_true_pareto_front(args.problem, int(args.dim), n_obj)
-        true_pareto_hv = None if true_pareto is None else float(hypervolume(true_pareto, ref_point))
+        true_pareto_hv = None
+        if int(reward_scheme_id) == 3:
+            true_pareto_hv = get_true_pareto_hv(args.problem, dim=int(args.dim), n_obj=n_obj)
         log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
         log(f"candidate_solver = {str(getattr(args, 'solver', 'nsga2')).lower()}")
         log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
@@ -1229,7 +1263,9 @@ def main() -> None:
         log(f"compare_infill = {compare_infill_name if compare_infill_name is not None else '-'}")
         log(f"reward_scheme = rs{int(reward_scheme_id)} | reward_lambda = {float(args.reward_lambda):.4f}")
         if int(reward_scheme_id) == 3 and true_pareto_hv is None:
-            raise RuntimeError(f"Could not compute true Pareto HV for reward scheme 3 on {args.problem}-{int(args.dim)}D.")
+            raise RuntimeError(
+                f"No precomputed true Pareto HV found for {args.problem}-{int(args.dim)}D-{int(n_obj)}obj in ref_points_hv.py."
+            )
         agent_load_started_at = time.perf_counter()
         disc = build_disc(args, map_location=str(args.device))
         agent_load_sec = time.perf_counter() - agent_load_started_at

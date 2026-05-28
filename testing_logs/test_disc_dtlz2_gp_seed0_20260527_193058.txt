@@ -1,0 +1,26 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz2_gp_seed0_20260527_193058.txt
+reference_point = [2.8389999866485596, 2.901099920272827, 2.8575000762939453] (from ref_points_hv.py)
+candidate_solver = nsga2
+nsga_af = mean | beta = 1.0000
+lhs_sample_sec = 0.000
+pseudo_front_only = 0
+compare_infill = -
+reward_scheme = rs1 | reward_lambda = 10.0000
+agent_load_sec = 1.269
+iter 0 | front = 37 | HV = 8.543843
+iter 1 | front = 30 | HV = 8.637981 | reward = 3.238256 | disc_forward_sec = 0.197
+iter 2 | front = 29 | HV = 8.637981 | reward = 1.970635 | disc_forward_sec = 0.014
+iter 3 | front = 30 | HV = 8.637981 | reward = 3.015100 | disc_forward_sec = 0.013
+iter 4 | front = 29 | HV = 8.637981 | reward = 2.744543 | disc_forward_sec = 0.014
+iter 5 | front = 30 | HV = 8.637981 | reward = 2.892068 | disc_forward_sec = 0.014
+iter 6 | front = 31 | HV = 8.637981 | reward = 1.667477 | disc_forward_sec = 0.130
+iter 7 | front = 32 | HV = 8.637981 | reward = 5.944455 | disc_forward_sec = 0.141
+iter 8 | front = 33 | HV = 8.637981 | reward = 2.717339 | disc_forward_sec = 0.134
+iter 9 | front = 33 | HV = 8.637981 | reward = 1.183934 | disc_forward_sec = 0.133
+iter 10 | front = 34 | HV = 8.637981 | reward = 2.740407 | disc_forward_sec = 0.133
+iter 11 | front = 34 | HV = 8.637981 | reward = 1.506732 | disc_forward_sec = 0.139
+iter 12 | front = 32 | HV = 8.637981 | reward = 3.952646 | disc_forward_sec = 0.136
+iter 13 | front = 32 | HV = 8.637981 | reward = -1.000000 | disc_forward_sec = 0.136
+iter 14 | front = 33 | HV = 8.793647 | reward = 3.051208 | disc_forward_sec = 0.136
+iter 15 | front = 34 | HV = 8.793657 | reward = 3.816563 | disc_forward_sec = 0.144
+iter 16 | front = 35 | HV = 8.793657 | reward = 1.836375 | disc_forward_sec = 0.139

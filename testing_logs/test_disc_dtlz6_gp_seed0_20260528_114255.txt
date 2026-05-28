@@ -1,0 +1,13 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz6_gp_seed0_20260528_114255.txt
+iter 0 | front = 63 | HV = 0.711916
+iter 1 | front = 63 | HV = 43.917690 | reward = 2.291911
+iter 2 | front = 64 | HV = 66.348944 | reward = 1.574760
+iter 3 | front = 63 | HV = 81.938866 | reward = 2.374259
+iter 4 | front = 62 | HV = 96.299924 | reward = 2.380724
+iter 5 | front = 60 | HV = 119.892727 | reward = 2.197023
+iter 6 | front = 60 | HV = 141.382544 | reward = 2.402968
+iter 7 | front = 61 | HV = 153.054143 | reward = 1.938333
+iter 8 | front = 62 | HV = 172.490513 | reward = 1.873978
+iter 9 | front = 62 | HV = 202.587340 | reward = 2.601549
+iter 10 | front = 63 | HV = 212.273634 | reward = 1.749686
+iter 11 | front = 63 | HV = 219.676136 | reward = 1.553474

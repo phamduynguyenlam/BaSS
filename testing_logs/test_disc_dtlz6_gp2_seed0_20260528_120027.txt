@@ -1,0 +1,23 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz6_gp2_seed0_20260528_120027.txt
+iter 0 | front = 63 | HV = 0.711916
+iter 1 | front = 63 | HV = 0.711916 | reward = 1.680501
+iter 2 | front = 64 | HV = 0.711916 | reward = 2.174746
+iter 3 | front = 65 | HV = 0.711916 | reward = 1.186020
+iter 4 | front = 66 | HV = 0.711916 | reward = 1.146739
+iter 5 | front = 66 | HV = 0.711916 | reward = 1.543010
+iter 6 | front = 67 | HV = 0.711916 | reward = 2.007435
+iter 7 | front = 67 | HV = 0.711916 | reward = -1.000000
+iter 8 | front = 68 | HV = 0.711916 | reward = 1.516390
+iter 9 | front = 69 | HV = 0.711916 | reward = 1.877652
+iter 10 | front = 70 | HV = 0.711916 | reward = 2.143277
+iter 11 | front = 71 | HV = 0.711916 | reward = 1.306432
+iter 12 | front = 72 | HV = 0.711916 | reward = 1.516738
+iter 13 | front = 73 | HV = 0.711916 | reward = 1.654382
+iter 14 | front = 74 | HV = 0.711916 | reward = 1.099612
+iter 15 | front = 75 | HV = 0.711916 | reward = 1.769957
+iter 16 | front = 75 | HV = 0.711916 | reward = -1.000000
+iter 17 | front = 74 | HV = 0.711916 | reward = 2.162701
+iter 18 | front = 75 | HV = 0.711916 | reward = 1.599838
+iter 19 | front = 75 | HV = 0.711916 | reward = -1.000000
+iter 20 | front = 76 | HV = 0.711916 | reward = 2.106384
+iter 21 | front = 77 | HV = 0.711916 | reward = 1.465657

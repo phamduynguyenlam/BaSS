@@ -1,0 +1,78 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz4_gp_seed0_20260527_204925.txt
+iter 0 | front = 6 | HV = 5.695924
+iter 1 | front = 6 | HV = 5.695924 | reward = -1.000000
+iter 2 | front = 6 | HV = 5.695924 | reward = -1.000000
+iter 3 | front = 6 | HV = 5.695924 | reward = -1.000000
+iter 4 | front = 6 | HV = 5.695924 | reward = -1.000000
+iter 5 | front = 6 | HV = 5.695924 | reward = -1.000000
+iter 6 | front = 6 | HV = 5.695924 | reward = -1.000000
+iter 7 | front = 6 | HV = 5.695924 | reward = -1.000000
+iter 8 | front = 7 | HV = 5.695924 | reward = 3.134606
+iter 9 | front = 8 | HV = 5.695924 | reward = 23.018677
+iter 10 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 11 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 12 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 13 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 14 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 15 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 16 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 17 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 18 | front = 8 | HV = 5.695924 | reward = -1.000000
+iter 19 | front = 8 | HV = 6.622856 | reward = 1.607250
+iter 20 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 21 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 22 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 23 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 24 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 25 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 26 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 27 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 28 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 29 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 30 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 31 | front = 8 | HV = 6.622856 | reward = -1.000000
+iter 32 | front = 7 | HV = 6.622856 | reward = 3.848027
+iter 33 | front = 8 | HV = 6.622873 | reward = 1.190376
+iter 34 | front = 8 | HV = 6.622873 | reward = -1.000000
+iter 35 | front = 8 | HV = 6.622873 | reward = -1.000000
+iter 36 | front = 8 | HV = 6.622873 | reward = -1.000000
+iter 37 | front = 8 | HV = 6.622873 | reward = -1.000000
+iter 38 | front = 8 | HV = 6.622873 | reward = -1.000000
+iter 39 | front = 8 | HV = 6.622873 | reward = -1.000000
+iter 40 | front = 7 | HV = 6.622901 | reward = 1.409782
+mean reward (40 steps) = 0.005218
+{
+  "problem": "DTLZ4",
+  "dim": 30,
+  "seed": 0,
+  "max_fe": 120,
+  "init_fe": 80,
+  "evolution_fe": 40,
+  "surrogate_model": "gp",
+  "candidate_solver": "moead",
+  "pseudo_front_only": false,
+  "reward_lambda": 10.0,
+  "reward_scheme": 1,
+  "agent_name": "disc",
+  "policy_name": "disc",
+  "agent_pth": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\weight\\disc_problem_zdt1_rs1_epoch_250.pth",
+  "random_model": false,
+  "reference_point": [
+    3.2674999237060547,
+    2.6442999839782715,
+    2.426300048828125
+  ],
+  "archive_size": 120,
+  "final_hv": 6.622901141308616,
+  "mean_reward_40_steps": 0.00521795399367333,
+  "final_front_size": 7,
+  "plot_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\png\\test_disc_dtlz4_seed0.png",
+  "npy_paths": {
+    "archive_x": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz4_seed0_archive_x.npy",
+    "archive_y": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz4_seed0_archive_y.npy",
+    "final_front": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz4_seed0_final_front.npy",
+    "fe_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz4_seed0_fe_history.npy",
+    "hv_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz4_seed0_hv_history.npy"
+  },
+  "test_log_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\testing_logs\\test_disc_dtlz4_gp_seed0_20260527_204925.txt"
+}

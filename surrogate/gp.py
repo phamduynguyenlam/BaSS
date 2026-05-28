@@ -11,7 +11,19 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, RBF, WhiteKernel
 from sklearn.utils.optimize import _check_optimize_result  # noqa: F401
 
-from surrogate.surrogate_model import SurrogateModel
+from surrogate.surrogate_model import Surrogate
+
+
+USEMO_GP_CONFIG: dict[str, object] = {
+    "normalize_x": False,
+    "surrogate_nsga_steps": 50,
+    "nu": 2.5,
+    "lcb_beta": 0.0,
+    "n_restarts": 1,
+    "candidate_pool_size": 80,
+    "keep_top_k": 80,
+    "filter_invalid": False,
+}
 
 
 def safe_divide(numerator: np.ndarray, denominator: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -32,11 +44,20 @@ def _suppress_gp_warnings() -> None:
     warnings.warn = warn
 
 
+def _constrained_lbfgsb_optimizer(obj_func, initial_theta, bounds):
+    opt_res = minimize(obj_func, initial_theta, method="L-BFGS-B", jac=True, bounds=bounds)
+    return opt_res.x, opt_res.fun
+
+
 @dataclass
-class GPSurrogateModel(SurrogateModel):
+class GPSurrogateModel(Surrogate):
     n_var: int
     n_obj: int
+    variant: str = "gp"
     nu: float = 5.0
+    seed: int = 0
+    xl: np.ndarray | None = None
+    xu: np.ndarray | None = None
     gps: list[GaussianProcessRegressor] = field(init=False, repr=False)
 
     @staticmethod
@@ -55,37 +76,105 @@ class GPSurrogateModel(SurrogateModel):
         _suppress_gp_warnings()
         self.n_var = int(self.n_var)
         self.n_obj = int(self.n_obj)
+        self.variant = str(self.variant).lower()
         self.nu = float(self.nu)
+        self.seed = int(self.seed)
+        if self.variant == "gp3":
+            if self.xl is None or self.xu is None:
+                raise ValueError("GPSurrogateModel variant='gp3' requires xl and xu.")
+            self.xl = np.asarray(self.xl, dtype=np.float64).reshape(1, -1)
+            self.xu = np.asarray(self.xu, dtype=np.float64).reshape(1, -1)
+            self.x_span = np.clip(self.xu - self.xl, 1e-12, None)
+        else:
+            self.xl = None
+            self.xu = None
+            self.x_span = None
         effective_nu = self._effective_matern_nu(self.nu)
         self.gps = []
 
-        def constrained_optimization(obj_func, initial_theta, bounds):
-            opt_res = minimize(obj_func, initial_theta, method="L-BFGS-B", jac=True, bounds=bounds)
-            return opt_res.x, opt_res.fun
-
-        for _ in range(self.n_obj):
-            if effective_nu > 0:
+        for obj_id in range(self.n_obj):
+            if self.variant == "gp3":
                 main_kernel = Matern(
-                    length_scale=np.ones(self.n_var),
-                    length_scale_bounds=(np.sqrt(1e-3), np.sqrt(1e3)),
+                    length_scale=1.0,
+                    length_scale_bounds=(1e-2, 1e2),
                     nu=effective_nu,
                 )
-            else:
-                main_kernel = RBF(
-                    length_scale=np.ones(self.n_var),
-                    length_scale_bounds=(np.sqrt(1e-3), np.sqrt(1e3)),
+                kernel = (
+                    ConstantKernel(
+                        constant_value=1.0,
+                        constant_value_bounds=(1e-2, 1e2),
+                    )
+                    * main_kernel
+                    + WhiteKernel(
+                        noise_level=1e-4,
+                        noise_level_bounds=(1e-6, 1e-2),
+                    )
                 )
-
-            kernel = (
-                ConstantKernel(constant_value=1.0, constant_value_bounds=(np.sqrt(1e-3), np.sqrt(1e3)))
-                * main_kernel
-                + ConstantKernel(constant_value=1e-2, constant_value_bounds=(np.exp(-6), np.exp(0)))
-            )
-            self.gps.append(GaussianProcessRegressor(kernel=kernel, optimizer=constrained_optimization))
+                model = GaussianProcessRegressor(
+                    kernel=kernel,
+                    alpha=1e-5,
+                    normalize_y=True,
+                    n_restarts_optimizer=5,
+                    optimizer=_constrained_lbfgsb_optimizer,
+                    random_state=self.seed + obj_id,
+                )
+            elif self.variant == "gp2":
+                kernel = (
+                    ConstantKernel(
+                        constant_value=1.0,
+                        constant_value_bounds=(np.sqrt(1e-3), np.sqrt(1e3)),
+                    )
+                    * RBF(
+                        length_scale=0.5,
+                        length_scale_bounds=(np.sqrt(1e-3), np.sqrt(1e3)),
+                    )
+                    + WhiteKernel(
+                        noise_level=1e-5,
+                        noise_level_bounds=(1e-8, 1e-2),
+                    )
+                )
+                model = GaussianProcessRegressor(
+                    kernel=kernel,
+                    alpha=1e-6,
+                    normalize_y=True,
+                    n_restarts_optimizer=20,
+                    optimizer=_constrained_lbfgsb_optimizer,
+                    random_state=self.seed + obj_id,
+                )
+            else:
+                if effective_nu > 0:
+                    main_kernel = Matern(
+                        length_scale=np.ones(self.n_var),
+                        length_scale_bounds=(np.sqrt(1e-3), np.sqrt(1e3)),
+                        nu=effective_nu,
+                    )
+                else:
+                    main_kernel = RBF(
+                        length_scale=np.ones(self.n_var),
+                        length_scale_bounds=(np.sqrt(1e-3), np.sqrt(1e3)),
+                    )
+                kernel = (
+                    ConstantKernel(constant_value=1.0, constant_value_bounds=(np.sqrt(1e-3), np.sqrt(1e3)))
+                    * main_kernel
+                    + ConstantKernel(constant_value=1e-2, constant_value_bounds=(np.exp(-6), np.exp(0)))
+                )
+                model = GaussianProcessRegressor(
+                    kernel=kernel,
+                    optimizer=_constrained_lbfgsb_optimizer,
+                    random_state=self.seed + obj_id,
+                )
+            self.gps.append(model)
 
     @property
     def models(self) -> list[GaussianProcessRegressor]:
         return self.gps
+
+    def _normalize_x(self, x: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x, dtype=np.float64)
+        if self.variant == "gp3" and bool(USEMO_GP_CONFIG["normalize_x"]):
+            assert self.xl is not None and self.x_span is not None
+            return np.clip((x_arr - self.xl) / self.x_span, 0.0, 1.0)
+        return x_arr
 
     def fit(self, x: np.ndarray, y: np.ndarray) -> "GPSurrogateModel":
         x_arr = np.asarray(x, dtype=np.float64)
@@ -99,9 +188,13 @@ class GPSurrogateModel(SurrogateModel):
         if y_arr.shape[1] != self.n_obj:
             raise ValueError(f"y must have {self.n_obj} objectives, got {y_arr.shape[1]}.")
 
+        x_fit = self._normalize_x(x_arr)
         for i, gp in enumerate(self.gps):
-            gp.fit(x_arr, y_arr[:, i])
+            gp.fit(x_fit, y_arr[:, i])
         return self
+
+    def refit(self, x: np.ndarray, y: np.ndarray) -> "GPSurrogateModel":
+        return self.fit(x, y)
 
     def evaluate(
         self,
@@ -110,7 +203,7 @@ class GPSurrogateModel(SurrogateModel):
         calc_gradient: bool = False,
         calc_hessian: bool = False,
     ) -> dict[str, np.ndarray | None]:
-        x_arr = np.asarray(x, dtype=np.float64)
+        x_arr = self._normalize_x(np.asarray(x, dtype=np.float64))
         f_list, df_list, hf_list = [], [], []
         s_list, ds_list, hs_list = [], [], []
 
@@ -228,98 +321,26 @@ class GPSurrogateModel(SurrogateModel):
         return out + 1e-6
 
 
-@dataclass
-class GP2SurrogateModel(SurrogateModel):
-    n_var: int
-    n_obj: int
-    seed: int = 0
-    gps: list[GaussianProcessRegressor] = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        super().__init__()
-        self.n_var = int(self.n_var)
-        self.n_obj = int(self.n_obj)
-        self.seed = int(self.seed)
-        self.gps = []
-        for obj_id in range(self.n_obj):
-            kernel = (
-                ConstantKernel(constant_value=1.0, constant_value_bounds="fixed")
-                * RBF(length_scale=0.5, length_scale_bounds="fixed")
-                + WhiteKernel(noise_level=1e-5, noise_level_bounds="fixed")
-            )
-            model = GaussianProcessRegressor(
-                kernel=kernel,
-                alpha=1e-6,
-                normalize_y=True,
-                optimizer=None,
-                random_state=int(self.seed) + int(obj_id),
-            )
-            self.gps.append(model)
-
-    @property
-    def models(self) -> list[GaussianProcessRegressor]:
-        return self.gps
-
-    def fit(self, x: np.ndarray, y: np.ndarray) -> "GP2SurrogateModel":
-        x_arr = np.asarray(x, dtype=np.float64)
-        y_arr = np.asarray(y, dtype=np.float64)
-        if x_arr.ndim != 2:
-            raise ValueError(f"x must have shape (N, d), got shape={x_arr.shape}.")
-        if y_arr.ndim != 2:
-            raise ValueError(f"y must have shape (N, m), got shape={y_arr.shape}.")
-        if x_arr.shape[1] != self.n_var:
-            raise ValueError(f"x must have {self.n_var} variables, got {x_arr.shape[1]}.")
-        if y_arr.shape[1] != self.n_obj:
-            raise ValueError(f"y must have {self.n_obj} objectives, got {y_arr.shape[1]}.")
-
-        for obj_id, gp in enumerate(self.gps):
-            gp.fit(x_arr, y_arr[:, obj_id])
-        return self
-
-    def predict_mean(self, x: np.ndarray, device: str | None = None) -> np.ndarray:
-        del device
-        x_arr = np.asarray(x, dtype=np.float64)
-        mean_preds: list[np.ndarray] = []
-        for gp in self.gps:
-            mean = gp.predict(x_arr)
-            mean_preds.append(np.asarray(mean, dtype=np.float32).reshape(-1))
-        return np.stack(mean_preds, axis=1).astype(np.float32)
-
-    def predict_std(self, x: np.ndarray) -> np.ndarray:
-        x_arr = np.asarray(x, dtype=np.float64)
-        std_preds: list[np.ndarray] = []
-        for gp in self.gps:
-            _, std = gp.predict(x_arr, return_std=True)
-            std_preds.append(np.asarray(std, dtype=np.float32).reshape(-1))
-        return np.stack(std_preds, axis=1).astype(np.float32) + 1e-6
-
-
 def fit_gp_surrogates(
     *,
     archive_x: np.ndarray,
     archive_y: np.ndarray,
     seed: int = 0,
     nu: float = 5.0,
+    variant: str = "gp",
+    xl: np.ndarray | None = None,
+    xu: np.ndarray | None = None,
 ) -> GPSurrogateModel:
-    del seed
     x_arr = np.asarray(archive_x, dtype=np.float64)
     y_arr = np.asarray(archive_y, dtype=np.float64)
-    model = GPSurrogateModel(n_var=int(x_arr.shape[1]), n_obj=int(y_arr.shape[1]), nu=float(nu))
-    return model.fit(x_arr, y_arr)
-
-
-def fit_gp2_surrogates(
-    *,
-    archive_x: np.ndarray,
-    archive_y: np.ndarray,
-    seed: int = 0,
-) -> GP2SurrogateModel:
-    x_arr = np.asarray(archive_x, dtype=np.float64)
-    y_arr = np.asarray(archive_y, dtype=np.float64)
-    model = GP2SurrogateModel(
+    model = GPSurrogateModel(
         n_var=int(x_arr.shape[1]),
         n_obj=int(y_arr.shape[1]),
+        variant=str(variant).lower(),
+        nu=float(nu),
         seed=int(seed),
+        xl=None if xl is None else np.asarray(xl, dtype=np.float64),
+        xu=None if xu is None else np.asarray(xu, dtype=np.float64),
     )
     return model.fit(x_arr, y_arr)
 
@@ -330,7 +351,7 @@ def predict_with_gp_mean(
     device: str | None = None,
 ) -> np.ndarray:
     del device
-    if isinstance(models, (GPSurrogateModel, GP2SurrogateModel)):
+    if isinstance(models, GPSurrogateModel):
         return np.asarray(models.predict_mean(x), dtype=np.float32)
 
     x_arr = np.asarray(x, dtype=np.float64)
@@ -347,7 +368,7 @@ def predict_with_gp_std(
     device: str | None = None,
 ) -> np.ndarray:
     del device
-    if isinstance(models, (GPSurrogateModel, GP2SurrogateModel)):
+    if isinstance(models, GPSurrogateModel):
         return np.asarray(models.predict_std(x), dtype=np.float32)
 
     x_arr = np.asarray(x, dtype=np.float64)

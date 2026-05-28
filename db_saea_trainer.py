@@ -19,10 +19,9 @@ from solver.nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
+from surrogate.gp import fit_gp_surrogates
 from surrogate.surrogate_model import (
     estimate_uncertainty,
-    fit_gp2_surrogates,
-    fit_gp_surrogates,
     fit_kan_surrogates,
     fit_tabpfn_surrogate,
     KANSurrogateModel,
@@ -129,7 +128,7 @@ def parse_args():
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--reward_scheme", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
-    parser.add_argument("--surrogate_model", type=str, default="kan", choices=["gp", "gp2", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="kan", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
@@ -206,13 +205,15 @@ def build_named_surrogate_from_cfg(cfg_dict, archive_x, archive_y, surrogate_nam
             archive_y=np.asarray(archive_y, dtype=np.float32),
             seed=int(cfg_dict.get("seed", 0)),
             nu=float(cfg_dict.get("gp_nu", 5.0)),
+            variant="gp",
         )
 
     if surrogate_name == "gp2":
-        return fit_gp2_surrogates(
+        return fit_gp_surrogates(
             archive_x=np.asarray(archive_x, dtype=np.float32),
             archive_y=np.asarray(archive_y, dtype=np.float32),
             seed=int(cfg_dict.get("seed", 0)),
+            variant="gp2",
         )
 
     if surrogate_name == "kan":
@@ -684,6 +685,8 @@ def compute_env_reward(
     reward_scheme_id,
     reward_lambda=10.0,
     true_pareto_hv=None,
+    archive_true_y=None,
+    archive_pred_y=None,
 ):
     previous_front = pareto_front(np.asarray(previous_archive_y, dtype=np.float32))
     selected_y = np.asarray(selected_y, dtype=np.float32)
@@ -709,12 +712,16 @@ def compute_env_reward(
     if int(reward_scheme_id) == 3:
         if true_pareto_hv is None:
             raise ValueError("reward_scheme_3 requires true_pareto_hv.")
+        if archive_true_y is None or archive_pred_y is None:
+            raise ValueError("reward_scheme_3 requires archive_true_y and archive_pred_y.")
         return float(
             reward_scheme_3(
                 previous_front=previous_front,
                 selected_objectives=selected_y,
                 ref_point=ref_point,
                 true_pareto_hv=float(true_pareto_hv),
+                archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
+                archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
             )
         )
     raise ValueError(f"Unsupported reward_scheme: {reward_scheme_id}")
@@ -866,6 +873,13 @@ class DiscSAEAEnv:
         self.archive_x = np.vstack([self.archive_x, chosen_x]).astype(np.float32)
         self.archive_y = np.vstack([self.archive_y, chosen_y]).astype(np.float32)
 
+        archive_pred_y = None
+        if int(self.cfg["reward_scheme"]) == 3:
+            fitted_surrogate = self._fit_surrogate()
+            if fitted_surrogate is None:
+                raise RuntimeError("reward_scheme_3 requires a fitted surrogate after archive update.")
+            archive_pred_y = predict_surrogate_mean(fitted_surrogate, self.archive_x)
+
         reward = compute_env_reward(
             previous_archive_y=previous_archive_y,
             selected_y=chosen_y,
@@ -873,6 +887,8 @@ class DiscSAEAEnv:
             reward_scheme_id=int(self.cfg["reward_scheme"]),
             reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
             true_pareto_hv=self.true_pareto_hv,
+            archive_true_y=self.archive_y,
+            archive_pred_y=archive_pred_y,
         )
 
         self.t += 1
@@ -897,6 +913,13 @@ class DiscSAEAEnv:
         self.archive_x = np.vstack([self.archive_x, chosen_x]).astype(np.float32)
         self.archive_y = np.vstack([self.archive_y, chosen_y]).astype(np.float32)
 
+        archive_pred_y = None
+        if int(self.cfg["reward_scheme"]) == 3:
+            fitted_surrogate = self._fit_surrogate()
+            if fitted_surrogate is None:
+                raise RuntimeError("reward_scheme_3 requires a fitted surrogate after archive update.")
+            archive_pred_y = predict_surrogate_mean(fitted_surrogate, self.archive_x)
+
         reward = compute_env_reward(
             previous_archive_y=previous_archive_y,
             selected_y=chosen_y,
@@ -904,6 +927,8 @@ class DiscSAEAEnv:
             reward_scheme_id=int(self.cfg["reward_scheme"]),
             reward_lambda=float(self.cfg.get("reward_lambda", 10.0)),
             true_pareto_hv=self.true_pareto_hv,
+            archive_true_y=self.archive_y,
+            archive_pred_y=archive_pred_y,
         )
 
         self.t += 1

@@ -1,0 +1,47 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\baseline\baseline_logs\usemo_dtlz6_gp2_ei_seed0_20260528_114021.txt
+reference_point = [16.8257999420166, 16.91939926147461, 17.76460075378418] (from ref_points_hv.py)
+candidate_solver = usemo
+surrogate_model = gp2
+nsga_af = ei | beta = 1.0000
+surrogate_nsga_steps = 100
+iter 0 | front = 63 | HV = 0.711916
+iter 1 | front = 63 | HV = 0.711916
+iter 2 | front = 64 | HV = 0.711916
+iter 3 | front = 65 | HV = 0.711916
+iter 4 | front = 66 | HV = 0.711916
+iter 5 | front = 67 | HV = 0.711916
+iter 6 | front = 68 | HV = 0.711916
+iter 7 | front = 68 | HV = 0.711916
+iter 8 | front = 69 | HV = 0.711916
+iter 9 | front = 70 | HV = 0.711916
+iter 10 | front = 71 | HV = 0.711916
+iter 11 | front = 72 | HV = 0.711916
+iter 12 | front = 73 | HV = 0.711916
+iter 13 | front = 74 | HV = 0.711916
+iter 14 | front = 75 | HV = 0.711916
+iter 15 | front = 76 | HV = 0.711916
+iter 16 | front = 77 | HV = 0.711916
+iter 17 | front = 78 | HV = 0.711916
+iter 18 | front = 79 | HV = 0.711916
+iter 19 | front = 80 | HV = 0.711916
+iter 20 | front = 81 | HV = 0.711916
+iter 21 | front = 82 | HV = 0.711916
+iter 22 | front = 81 | HV = 0.711916
+iter 23 | front = 81 | HV = 0.711916
+iter 24 | front = 81 | HV = 0.711916
+iter 25 | front = 82 | HV = 0.711916
+iter 26 | front = 83 | HV = 0.711916
+iter 27 | front = 82 | HV = 0.711916
+iter 28 | front = 82 | HV = 0.711916
+iter 29 | front = 83 | HV = 0.711916
+iter 30 | front = 84 | HV = 0.711916
+iter 31 | front = 85 | HV = 0.711916
+iter 32 | front = 85 | HV = 0.711916
+iter 33 | front = 85 | HV = 0.711916
+iter 34 | front = 85 | HV = 0.711916
+iter 35 | front = 86 | HV = 0.711916
+iter 36 | front = 87 | HV = 0.711916
+iter 37 | front = 87 | HV = 0.711916
+iter 38 | front = 88 | HV = 0.711916
+iter 39 | front = 88 | HV = 0.711916
+iter 40 | front = 89 | HV = 0.711916

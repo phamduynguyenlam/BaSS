@@ -1,0 +1,13 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz2_gp_seed0_20260528_121443.txt
+reference_point = [2.8389999866485596, 2.901099920272827, 2.8575000762939453] (from ref_points_hv.py)
+candidate_solver = nsga2
+nsga_af = mean | beta = 1.0000
+lhs_sample_sec = 0.000
+pseudo_front_only = 0
+compare_infill = -
+reward_scheme = rs1 | reward_lambda = 10.0000
+agent_load_sec = 0.008
+iter 0 | front = 37 | HV = 8.543843
+iter 1 | front = 38 | HV = 8.543843 | reward = 1.000000 | disc_forward_sec = 0.050 | surrogate_nsga_steps = 10
+iter 2 | front = 34 | HV = 8.543843 | reward = 2.196550 | disc_forward_sec = 0.061 | surrogate_nsga_steps = 10
+iter 3 | front = 34 | HV = 8.543843 | reward = -1.000000 | disc_forward_sec = 0.053 | surrogate_nsga_steps = 10

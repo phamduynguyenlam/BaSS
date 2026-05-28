@@ -1,0 +1,88 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz3_gp_seed0_20260527_194350.txt
+reference_point = [2421.642578125, 1905.2767333984375, 2532.968994140625] (from ref_points_hv.py)
+candidate_solver = nsga2
+nsga_af = mean | beta = 1.0000
+lhs_sample_sec = 0.000
+pseudo_front_only = 0
+compare_infill = -
+reward_scheme = rs1 | reward_lambda = 10.0000
+agent_load_sec = 1.351
+iter 0 | front = 41 | HV = 1663620495.794341
+iter 1 | front = 42 | HV = 1663620495.794341 | reward = 1.000000 | disc_forward_sec = 0.216
+iter 2 | front = 42 | HV = 1663620495.794341 | reward = -1.000000 | disc_forward_sec = 0.015
+iter 3 | front = 42 | HV = 1663620495.794341 | reward = 1.399991 | disc_forward_sec = 0.013
+iter 4 | front = 42 | HV = 1663620495.794341 | reward = -1.000000 | disc_forward_sec = 0.129
+iter 5 | front = 42 | HV = 1663620495.794341 | reward = -1.000000 | disc_forward_sec = 0.132
+iter 6 | front = 42 | HV = 1666773754.631006 | reward = 1.755450 | disc_forward_sec = 0.131
+iter 7 | front = 43 | HV = 1666773754.631006 | reward = 1.166028 | disc_forward_sec = 0.137
+iter 8 | front = 43 | HV = 1666773754.631006 | reward = -1.000000 | disc_forward_sec = 0.133
+iter 9 | front = 43 | HV = 1666773754.631006 | reward = -1.000000 | disc_forward_sec = 0.131
+iter 10 | front = 44 | HV = 1666773754.631006 | reward = 1.393628 | disc_forward_sec = 0.135
+iter 11 | front = 45 | HV = 1666773754.631006 | reward = 1.172303 | disc_forward_sec = 0.139
+iter 12 | front = 45 | HV = 1666773754.631006 | reward = 1.427618 | disc_forward_sec = 0.134
+iter 13 | front = 45 | HV = 1666773754.631006 | reward = 1.063829 | disc_forward_sec = 0.136
+iter 14 | front = 45 | HV = 1666773754.631006 | reward = -1.000000 | disc_forward_sec = 0.136
+iter 15 | front = 46 | HV = 1666773754.631006 | reward = 1.051708 | disc_forward_sec = 0.144
+iter 16 | front = 29 | HV = 2376270332.649585 | reward = 3.615384 | disc_forward_sec = 0.137
+iter 17 | front = 29 | HV = 2376270332.649585 | reward = 1.361850 | disc_forward_sec = 0.139
+iter 18 | front = 29 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.141
+iter 19 | front = 30 | HV = 2376270332.649585 | reward = 2.035558 | disc_forward_sec = 0.147
+iter 20 | front = 30 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.142
+iter 21 | front = 30 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.142
+iter 22 | front = 31 | HV = 2376270332.649585 | reward = 1.944454 | disc_forward_sec = 0.149
+iter 23 | front = 32 | HV = 2376270332.649585 | reward = 1.016279 | disc_forward_sec = 0.141
+iter 24 | front = 30 | HV = 2376270332.649585 | reward = 1.302608 | disc_forward_sec = 0.144
+iter 25 | front = 31 | HV = 2376270332.649585 | reward = 1.496232 | disc_forward_sec = 0.145
+iter 26 | front = 32 | HV = 2376270332.649585 | reward = 1.765773 | disc_forward_sec = 0.150
+iter 27 | front = 33 | HV = 2376270332.649585 | reward = 1.226871 | disc_forward_sec = 0.151
+iter 28 | front = 34 | HV = 2376270332.649585 | reward = 1.425062 | disc_forward_sec = 0.147
+iter 29 | front = 31 | HV = 2376270332.649585 | reward = 1.253516 | disc_forward_sec = 0.158
+iter 30 | front = 31 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.153
+iter 31 | front = 31 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.155
+iter 32 | front = 31 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.152
+iter 33 | front = 31 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.161
+iter 34 | front = 31 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.157
+iter 35 | front = 31 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.155
+iter 36 | front = 31 | HV = 2376270332.649585 | reward = -1.000000 | disc_forward_sec = 0.165
+iter 37 | front = 32 | HV = 2376912941.801757 | reward = 1.105234 | disc_forward_sec = 0.157
+iter 38 | front = 32 | HV = 2376912941.801757 | reward = -1.000000 | disc_forward_sec = 0.157
+iter 39 | front = 32 | HV = 2376912941.801757 | reward = -1.000000 | disc_forward_sec = 0.165
+iter 40 | front = 32 | HV = 2376912941.801757 | reward = -1.000000 | disc_forward_sec = 0.159
+mean reward (40 steps) = 0.299484
+{
+  "policy": "DISC",
+  "problem": "DTLZ3",
+  "dim": 30,
+  "seed": 0,
+  "max_fe": 120,
+  "init_fe": 80,
+  "evolution_fe": 40,
+  "surrogate_model": "gp",
+  "candidate_solver": "nsga2",
+  "pseudo_front_only": false,
+  "reward_lambda": 10.0,
+  "reward_scheme": 1,
+  "ensemble_model": 8,
+  "agent_pth": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\weight\\disc_problem_zdt1_rs1_epoch_250.pth",
+  "random_model": false,
+  "reference_point": [
+    2421.642578125,
+    1905.2767333984375,
+    2532.968994140625
+  ],
+  "archive_size": 120,
+  "final_hv": 2376912941.801757,
+  "mean_reward_40_steps": 0.2994844363819068,
+  "mean_select_sec": 0.14079853499424644,
+  "final_front_size": 32,
+  "plot_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\png\\test_disc_dtlz3_seed0.png",
+  "npy_paths": {
+    "archive_x": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz3_seed0_archive_x.npy",
+    "archive_y": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz3_seed0_archive_y.npy",
+    "final_front": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz3_seed0_final_front.npy",
+    "fe_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz3_seed0_fe_history.npy",
+    "hv_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz3_seed0_hv_history.npy"
+  },
+  "mean_disc_forward_sec": 0.14079853499424644,
+  "test_log_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\testing_logs\\test_disc_dtlz3_gp_seed0_20260527_194350.txt"
+}

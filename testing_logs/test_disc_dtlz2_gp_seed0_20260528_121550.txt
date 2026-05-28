@@ -1,0 +1,88 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz2_gp_seed0_20260528_121550.txt
+reference_point = [2.8389999866485596, 2.901099920272827, 2.8575000762939453] (from ref_points_hv.py)
+candidate_solver = nsga2
+nsga_af = mean | beta = 1.0000
+lhs_sample_sec = 0.000
+pseudo_front_only = 0
+compare_infill = -
+reward_scheme = rs1 | reward_lambda = 10.0000
+agent_load_sec = 0.017
+iter 0 | front = 37 | HV = 8.543843
+iter 1 | front = 34 | HV = 9.291898 | reward = 3.729827 | disc_forward_sec = 0.074 | surrogate_nsga_steps = 10
+iter 2 | front = 35 | HV = 9.299610 | reward = 3.306502 | disc_forward_sec = 0.074 | surrogate_nsga_steps = 10
+iter 3 | front = 28 | HV = 11.556787 | reward = 3.384316 | disc_forward_sec = 0.077 | surrogate_nsga_steps = 10
+iter 4 | front = 24 | HV = 12.772182 | reward = 4.255999 | disc_forward_sec = 0.077 | surrogate_nsga_steps = 10
+iter 5 | front = 25 | HV = 12.796107 | reward = 4.239878 | disc_forward_sec = 0.082 | surrogate_nsga_steps = 10
+iter 6 | front = 17 | HV = 13.336945 | reward = 3.569132 | disc_forward_sec = 0.078 | surrogate_nsga_steps = 10
+iter 7 | front = 18 | HV = 13.342767 | reward = 3.123710 | disc_forward_sec = 0.067 | surrogate_nsga_steps = 10
+iter 8 | front = 18 | HV = 13.342767 | reward = -1.000000 | disc_forward_sec = 0.071 | surrogate_nsga_steps = 10
+iter 9 | front = 19 | HV = 13.349439 | reward = 3.828187 | disc_forward_sec = 0.072 | surrogate_nsga_steps = 10
+iter 10 | front = 17 | HV = 13.740345 | reward = 3.466044 | disc_forward_sec = 0.081 | surrogate_nsga_steps = 10
+iter 11 | front = 18 | HV = 13.751201 | reward = 4.851387 | disc_forward_sec = 0.085 | surrogate_nsga_steps = 100
+iter 12 | front = 19 | HV = 13.751201 | reward = 5.463620 | disc_forward_sec = 0.085 | surrogate_nsga_steps = 100
+iter 13 | front = 20 | HV = 13.751201 | reward = 3.326709 | disc_forward_sec = 0.085 | surrogate_nsga_steps = 100
+iter 14 | front = 18 | HV = 13.751201 | reward = 2.702786 | disc_forward_sec = 0.082 | surrogate_nsga_steps = 100
+iter 15 | front = 18 | HV = 13.751201 | reward = -1.000000 | disc_forward_sec = 0.086 | surrogate_nsga_steps = 100
+iter 16 | front = 19 | HV = 13.751201 | reward = 1.278882 | disc_forward_sec = 0.088 | surrogate_nsga_steps = 100
+iter 17 | front = 19 | HV = 13.751201 | reward = -1.000000 | disc_forward_sec = 0.084 | surrogate_nsga_steps = 100
+iter 18 | front = 20 | HV = 13.762829 | reward = 2.021274 | disc_forward_sec = 0.083 | surrogate_nsga_steps = 100
+iter 19 | front = 20 | HV = 13.763736 | reward = 2.343347 | disc_forward_sec = 0.082 | surrogate_nsga_steps = 100
+iter 20 | front = 20 | HV = 13.763736 | reward = 1.919200 | disc_forward_sec = 0.082 | surrogate_nsga_steps = 100
+iter 21 | front = 21 | HV = 13.763738 | reward = 3.261782 | disc_forward_sec = 0.089 | surrogate_nsga_steps = 100
+iter 22 | front = 22 | HV = 13.763738 | reward = 1.278002 | disc_forward_sec = 0.082 | surrogate_nsga_steps = 100
+iter 23 | front = 22 | HV = 14.018667 | reward = 2.939269 | disc_forward_sec = 0.093 | surrogate_nsga_steps = 100
+iter 24 | front = 23 | HV = 14.018667 | reward = 1.202151 | disc_forward_sec = 0.087 | surrogate_nsga_steps = 100
+iter 25 | front = 24 | HV = 14.018671 | reward = 1.251670 | disc_forward_sec = 0.092 | surrogate_nsga_steps = 100
+iter 26 | front = 24 | HV = 14.018671 | reward = -1.000000 | disc_forward_sec = 0.092 | surrogate_nsga_steps = 100
+iter 27 | front = 25 | HV = 14.018867 | reward = 1.266671 | disc_forward_sec = 0.093 | surrogate_nsga_steps = 100
+iter 28 | front = 26 | HV = 14.170431 | reward = 1.694738 | disc_forward_sec = 0.095 | surrogate_nsga_steps = 100
+iter 29 | front = 27 | HV = 14.170431 | reward = 1.415836 | disc_forward_sec = 0.093 | surrogate_nsga_steps = 100
+iter 30 | front = 27 | HV = 14.170431 | reward = -1.000000 | disc_forward_sec = 0.090 | surrogate_nsga_steps = 100
+iter 31 | front = 27 | HV = 14.170431 | reward = -1.000000 | disc_forward_sec = 0.087 | surrogate_nsga_steps = 100
+iter 32 | front = 28 | HV = 14.170431 | reward = 1.215728 | disc_forward_sec = 0.097 | surrogate_nsga_steps = 100
+iter 33 | front = 29 | HV = 14.170760 | reward = 1.196099 | disc_forward_sec = 0.098 | surrogate_nsga_steps = 100
+iter 34 | front = 29 | HV = 14.170760 | reward = -1.000000 | disc_forward_sec = 0.097 | surrogate_nsga_steps = 100
+iter 35 | front = 30 | HV = 14.184139 | reward = 2.305569 | disc_forward_sec = 0.103 | surrogate_nsga_steps = 100
+iter 36 | front = 31 | HV = 14.186077 | reward = 4.563022 | disc_forward_sec = 0.104 | surrogate_nsga_steps = 100
+iter 37 | front = 32 | HV = 14.186077 | reward = 1.442536 | disc_forward_sec = 0.101 | surrogate_nsga_steps = 100
+iter 38 | front = 32 | HV = 14.186077 | reward = -1.000000 | disc_forward_sec = 0.102 | surrogate_nsga_steps = 100
+iter 39 | front = 32 | HV = 14.186077 | reward = -1.000000 | disc_forward_sec = 0.104 | surrogate_nsga_steps = 100
+iter 40 | front = 32 | HV = 14.186077 | reward = -1.000000 | disc_forward_sec = 0.101 | surrogate_nsga_steps = 100
+mean reward (40 steps) = 1.796097
+{
+  "policy": "DISC",
+  "problem": "DTLZ2",
+  "dim": 30,
+  "seed": 0,
+  "max_fe": 120,
+  "init_fe": 80,
+  "evolution_fe": 40,
+  "surrogate_model": "gp",
+  "candidate_solver": "nsga2",
+  "pseudo_front_only": false,
+  "reward_lambda": 10.0,
+  "reward_scheme": 1,
+  "ensemble_model": 8,
+  "agent_pth": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\weight\\disc_problem_zdt1_rs1_epoch_250.pth",
+  "random_model": false,
+  "reference_point": [
+    2.8389999866485596,
+    2.901099920272827,
+    2.8575000762939453
+  ],
+  "archive_size": 120,
+  "final_hv": 14.186076833151972,
+  "mean_reward_40_steps": 1.7960968088697258,
+  "mean_select_sec": 0.08726459249992331,
+  "final_front_size": 32,
+  "plot_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\png\\test_disc_dtlz2_seed0.png",
+  "npy_paths": {
+    "archive_x": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz2_seed0_archive_x.npy",
+    "archive_y": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz2_seed0_archive_y.npy",
+    "final_front": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz2_seed0_final_front.npy",
+    "fe_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz2_seed0_fe_history.npy",
+    "hv_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\npy\\test_disc_dtlz2_seed0_hv_history.npy"
+  },
+  "mean_disc_forward_sec": 0.08726459249992331,
+  "test_log_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\DISC-main\\testing_logs\\test_disc_dtlz2_gp_seed0_20260528_121550.txt"
+}

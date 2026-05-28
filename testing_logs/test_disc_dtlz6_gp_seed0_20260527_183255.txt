@@ -1,0 +1,34 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz6_gp_seed0_20260527_183255.txt
+iter 0 | front = 63 | HV = 0.711916
+iter 1 | front = 63 | HV = 43.917690 | reward = 2.291911
+iter 2 | front = 64 | HV = 66.348944 | reward = 1.574760
+iter 3 | front = 63 | HV = 81.938866 | reward = 2.374259
+iter 4 | front = 62 | HV = 96.299924 | reward = 2.380724
+iter 5 | front = 60 | HV = 119.892727 | reward = 2.197023
+iter 6 | front = 60 | HV = 141.382544 | reward = 2.402968
+iter 7 | front = 61 | HV = 153.054143 | reward = 1.938333
+iter 8 | front = 62 | HV = 172.490513 | reward = 1.873978
+iter 9 | front = 62 | HV = 202.587340 | reward = 2.601549
+iter 10 | front = 63 | HV = 212.273634 | reward = 1.749686
+iter 11 | front = 63 | HV = 219.676136 | reward = 1.553474
+iter 12 | front = 63 | HV = 233.198828 | reward = 1.340958
+iter 13 | front = 60 | HV = 233.198828 | reward = 2.545343
+iter 14 | front = 61 | HV = 239.907309 | reward = 1.358405
+iter 15 | front = 62 | HV = 240.963275 | reward = 1.361725
+iter 16 | front = 63 | HV = 258.713192 | reward = 1.702064
+iter 17 | front = 60 | HV = 258.713192 | reward = 3.018162
+iter 18 | front = 61 | HV = 258.933665 | reward = 1.499739
+iter 19 | front = 62 | HV = 258.933665 | reward = 2.083910
+iter 20 | front = 62 | HV = 258.933665 | reward = -1.000000
+iter 21 | front = 63 | HV = 261.231374 | reward = 1.584019
+iter 22 | front = 64 | HV = 264.413668 | reward = 1.262823
+iter 23 | front = 65 | HV = 268.848400 | reward = 1.761769
+iter 24 | front = 66 | HV = 269.815913 | reward = 1.860692
+iter 25 | front = 66 | HV = 269.815913 | reward = -1.000000
+iter 26 | front = 67 | HV = 269.832466 | reward = 1.177462
+iter 27 | front = 68 | HV = 269.832466 | reward = 1.935390
+iter 28 | front = 69 | HV = 270.071391 | reward = 1.209421
+iter 29 | front = 70 | HV = 271.147490 | reward = 1.351608
+iter 30 | front = 71 | HV = 272.811570 | reward = 1.714942
+iter 31 | front = 72 | HV = 274.189999 | reward = 1.567816
+iter 32 | front = 73 | HV = 274.587641 | reward = 1.540778

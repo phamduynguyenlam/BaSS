@@ -24,14 +24,14 @@ from infill import (
 )
 from solver.nsga2_solver import run_surrogate_nsga2
 from solver.nsga3_solver import run_surrogate_nsga3
+from solver.moead_solver import run_surrogate_moead
 from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
+from surrogate.gp import fit_gp_surrogates
 from surrogate.surrogate_model import (
     estimate_uncertainty,
-    fit_gp2_surrogates,
-    fit_gp_surrogates,
     fit_kan_surrogates,
     fit_tabpfn_surrogate,
     KANSurrogateModel,
@@ -121,6 +121,8 @@ def compute_test_reward(
     ref_point: np.ndarray,
     reward_lambda: float,
     true_pareto_hv: float | None = None,
+    archive_true_y: np.ndarray | None = None,
+    archive_pred_y: np.ndarray | None = None,
 ) -> float:
     if int(reward_scheme_id) == 1:
         return float(
@@ -143,12 +145,16 @@ def compute_test_reward(
     if int(reward_scheme_id) == 3:
         if true_pareto_hv is None:
             raise ValueError("reward_scheme_3 requires true_pareto_hv in tester.")
+        if archive_true_y is None or archive_pred_y is None:
+            raise ValueError("reward_scheme_3 requires archive_true_y and archive_pred_y in tester.")
         return float(
             reward_scheme_3(
                 previous_front=previous_front,
                 selected_objectives=selected_objectives,
                 ref_point=ref_point,
                 true_pareto_hv=float(true_pareto_hv),
+                archive_true_y=np.asarray(archive_true_y, dtype=np.float32),
+                archive_pred_y=np.asarray(archive_pred_y, dtype=np.float32),
             )
         )
     raise ValueError(f"Unsupported reward_scheme_id for tester: {reward_scheme_id}")
@@ -172,7 +178,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logit_scale", type=float, default=5.0)
     parser.add_argument("--agent_pth", type=str, default=None)
     parser.add_argument("--random_model", action="store_true")
-    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "gp2", "kan", "tabpfn"])
+    parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--kan_steps", type=int, default=25)
     parser.add_argument("--kan_hidden_width", type=int, default=10)
@@ -185,7 +191,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--hybrid_nsga", action="store_true")
     parser.add_argument("--compare_infill", type=str, default=None)
-    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "usemo"])
+    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "moead", "usemo"])
     parser.add_argument("--pseudo_front_only", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
@@ -245,13 +251,26 @@ def build_named_surrogate(args: argparse.Namespace, archive_x: np.ndarray, archi
             archive_y=archive_y,
             seed=int(args.seed),
             nu=float(getattr(args, "gp_nu", 5.0)),
+            variant="gp",
         )
 
     if surrogate_name == "gp2":
-        return fit_gp2_surrogates(
+        return fit_gp_surrogates(
             archive_x=archive_x,
             archive_y=archive_y,
             seed=int(args.seed),
+            variant="gp2",
+        )
+
+    if surrogate_name == "gp3":
+        return fit_gp_surrogates(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            variant="gp3",
+            xl=np.min(np.asarray(archive_x, dtype=np.float32), axis=0),
+            xu=np.max(np.asarray(archive_x, dtype=np.float32), axis=0),
+            seed=int(args.seed),
+            nu=float(getattr(args, "gp3_nu", 2.5)),
         )
 
     if surrogate_name == "tabpfn":
@@ -363,16 +382,28 @@ def run_surrogate_optimizer(
             surrogate_nsga_steps=int(args.surrogate_nsga_steps),
             seed=int(args.seed) + int(step),
         )
+    if solver_name == "moead":
+        return run_surrogate_moead(
+            gps=nsga2_models,
+            surrogate=nsga2_surrogate,
+            problem=nsga_problem,
+            archive_x=archive_x,
+            pop_size=int(args.offspring_size),
+            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            seed=int(args.seed) + int(step),
+        )
     if solver_name == "usemo":
         offspring_x, offspring_pred, _ = run_surrogate_usemo(
             problem=nsga_problem,
             archive_x=archive_x,
             archive_y=archive_y,
             pop_size=int(args.offspring_size),
-            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            surrogate_nsga_steps=args,
             seed=int(args.seed) + int(step),
             acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
+            surrogate_model=args,
+            device=args,
         )
         return offspring_x, offspring_pred
     raise ValueError(f"Unsupported solver: {solver_name}")
@@ -397,6 +428,8 @@ def _generate_single_offspring_pool(
     step: int,
     surrogate_name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    local_args = argparse.Namespace(**vars(args))
+    local_args.surrogate_nsga_steps = int(resolve_surrogate_nsga_steps(args, surrogate_name))
     solver_name = str(getattr(args, "solver", "nsga2")).lower()
     if solver_name == "usemo":
         offspring_x, offspring_pred, offspring_sigma = run_surrogate_usemo(
@@ -404,10 +437,12 @@ def _generate_single_offspring_pool(
             archive_x=archive_x,
             archive_y=archive_y,
             pop_size=int(args.offspring_size),
-            surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+            surrogate_nsga_steps=local_args,
             seed=int(args.seed) + int(step),
             acquisition=str(getattr(args, "nsga_af", "ei")).lower(),
             beta=float(getattr(args, "beta", 1.0)),
+            surrogate_model=local_args,
+            device=local_args,
         )
         return (
             np.asarray(offspring_x, dtype=np.float32),
@@ -415,8 +450,6 @@ def _generate_single_offspring_pool(
             np.asarray(offspring_sigma, dtype=np.float32),
         )
 
-    local_args = argparse.Namespace(**vars(args))
-    local_args.surrogate_nsga_steps = int(resolve_surrogate_nsga_steps(args, surrogate_name))
     nsga2_surrogate, nsga2_models = prepare_nsga_surrogate(args, surrogate)
     offspring_x, offspring_pred = run_surrogate_optimizer(
         args=local_args,
@@ -711,6 +744,10 @@ def run_policy_rollout(
         selected_pred = offspring_pred[selected_idx]
         selected_true = np.asarray(problem.evaluate(selected_x), dtype=np.float32)
         previous_front = pareto_front(np.asarray(archive_y, dtype=np.float32))
+        archive_x = np.vstack([archive_x, selected_x]).astype(np.float32)
+        archive_y = np.vstack([archive_y, selected_true]).astype(np.float32)
+        surrogate = build_surrogate(args, archive_x, archive_y)
+        archive_pred_y = predict_surrogate_mean(surrogate, archive_x)
         step_reward = compute_test_reward(
             reward_scheme_id=int(reward_scheme_id),
             previous_front=previous_front,
@@ -718,10 +755,9 @@ def run_policy_rollout(
             ref_point=ref_point,
             reward_lambda=float(args.reward_lambda),
             true_pareto_hv=true_pareto_hv,
+            archive_true_y=archive_y,
+            archive_pred_y=archive_pred_y,
         )
-
-        archive_x = np.vstack([archive_x, selected_x]).astype(np.float32)
-        archive_y = np.vstack([archive_y, selected_true]).astype(np.float32)
         hv = hypervolume(archive_y, ref_point)
         fe = int(args.init_fe) + step + 1
         front_size = int(pareto_front(archive_y).shape[0])

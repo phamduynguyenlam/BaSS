@@ -13,14 +13,14 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-from agents.disc import Disc
+from agents.meta import Disc
 from solver.nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
+from surrogate.gp import fit_gp_surrogates
 from surrogate.surrogate_model import (
     estimate_uncertainty,
-    fit_gp_surrogates,
     fit_kan_surrogates,
     fit_tabpfn_surrogate,
     KANSurrogateModel,
@@ -106,6 +106,8 @@ def clone_state_dict_cpu(model):
 
 
 def select_action_from_output(out):
+    if "action" in out:
+        return int(out["action"].reshape(-1)[0].item())
     ranking = out["ranking"]
     return int(ranking[0, 0].item())
 
@@ -170,6 +172,7 @@ def build_surrogate_from_cfg(cfg_dict, archive_x, archive_y):
             archive_y=np.asarray(archive_y, dtype=np.float32),
             seed=int(cfg_dict.get("seed", 0)),
             nu=float(cfg_dict.get("gp_nu", 5.0)),
+            variant="gp",
         )
 
     if surrogate_name == "kan":
@@ -791,7 +794,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
             upper_bound = to_tensor(state["upper_bound"][None, ...], device)
 
             encoder_forward_start = time.perf_counter()
-            encoded = agent.encode(
+            out = agent(
                 x_true=x_true,
                 y_true=y_true,
                 x_sur=x_sur,
@@ -800,16 +803,11 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
                 progress=progress,
                 lower_bound=lower_bound,
                 upper_bound=upper_bound,
-            )
-            sync_device(device)
-            encoder_forward_time += time.perf_counter() - encoder_forward_start
-
-            out = agent.decode_ranking(
-                h_surr=encoded["H_surr"],
-                progress=encoded["progress"],
                 decode_type=str(cfg_dict.get("policy_mode", "epsilon_greedy")),
                 epsilon=epsilon,
             )
+            sync_device(device)
+            encoder_forward_time += time.perf_counter() - encoder_forward_start
 
         action = select_action_from_output(out)
         next_state, reward, done = env.step(action, state)

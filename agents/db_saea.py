@@ -224,9 +224,11 @@ class DBSAEAAgent(nn.Module):
         progress,
         lower_bound,
         upper_bound,
+        prev_reward=None,
         archive_mask=None,
         candidate_mask=None,
     ):
+        del prev_reward
         prepared = self._prepare_inputs(
             x_true=x_true,
             y_true=y_true,
@@ -332,6 +334,7 @@ class DBSAEAAgent(nn.Module):
         progress,
         lower_bound,
         upper_bound,
+        prev_reward=None,
         archive_mask=None,
         candidate_mask=None,
         decode_type="epsilon_greedy",
@@ -346,6 +349,7 @@ class DBSAEAAgent(nn.Module):
             progress=progress,
             lower_bound=lower_bound,
             upper_bound=upper_bound,
+            prev_reward=prev_reward,
             archive_mask=archive_mask,
             candidate_mask=candidate_mask,
         )

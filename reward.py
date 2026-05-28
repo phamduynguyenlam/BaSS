@@ -39,6 +39,40 @@ def hypervolume(values: np.ndarray, ref_point: np.ndarray) -> float:
     return float(HV(ref_point=np.asarray(ref_point, dtype=np.float32))(front))
 
 
+def _normalize_joint(true_values: np.ndarray, pred_values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    true_arr = np.asarray(true_values, dtype=np.float32)
+    pred_arr = np.asarray(pred_values, dtype=np.float32)
+    stacked = np.vstack([true_arr, pred_arr])
+    min_v = stacked.min(axis=0, keepdims=True)
+    max_v = stacked.max(axis=0, keepdims=True)
+    denom = np.clip(max_v - min_v, 1e-12, None)
+    true_norm = (true_arr - min_v) / denom
+    pred_norm = (pred_arr - min_v) / denom
+    return true_norm.astype(np.float32), pred_norm.astype(np.float32)
+
+
+def archive_fit_mse_reward(
+    *,
+    archive_true_y: np.ndarray,
+    archive_pred_y: np.ndarray,
+) -> float:
+    archive_true = np.asarray(archive_true_y, dtype=np.float32)
+    archive_pred = np.asarray(archive_pred_y, dtype=np.float32)
+    if archive_true.ndim != 2 or archive_pred.ndim != 2:
+        raise ValueError("archive_true_y and archive_pred_y must be 2D.")
+    if archive_true.shape != archive_pred.shape:
+        raise ValueError(
+            f"archive_true_y and archive_pred_y shape mismatch: {archive_true.shape} vs {archive_pred.shape}."
+        )
+    if archive_true.shape[0] <= 0:
+        return 0.0
+
+    true_norm, pred_norm = _normalize_joint(archive_true, archive_pred)
+    true_scalar = true_norm.mean(axis=1)
+    pred_scalar = pred_norm.mean(axis=1)
+    return float(np.mean((true_scalar - pred_scalar) ** 2))
+
+
 def _filter_candidates_on_front(
     selected_objectives: np.ndarray,
     combined_front: np.ndarray,
@@ -175,16 +209,26 @@ def reward_scheme_3(
     selected_objectives: np.ndarray,
     ref_point: np.ndarray,
     true_pareto_hv: float,
+    archive_true_y: np.ndarray,
+    archive_pred_y: np.ndarray,
+    hv_lambda: float = 25.0,
+    fit_lambda: float = 0.1,
     hv_epsilon: float = 1e-8,
 ) -> float:
-    """Scaled normalized HV improvement against the remaining gap to the true Pareto-front HV."""
+    """Reward = hv_lambda * normalized HV gain + fit_lambda * archive fit MSE after surrogate refit."""
     previous_front = np.asarray(previous_front, dtype=np.float32)
     selected_objectives = np.asarray(selected_objectives, dtype=np.float32)
     combined_front = np.vstack([previous_front, selected_objectives])
 
     prev_hv = hypervolume(previous_front, ref_point)
     next_hv = hypervolume(combined_front, ref_point)
-    if next_hv <= prev_hv:
-        return 0.0
-    remaining_gap = max(float(true_pareto_hv) - float(next_hv), float(hv_epsilon))
-    return float(50.0 * (float(next_hv) - float(prev_hv)) / remaining_gap)
+    hv_term = 0.0
+    if next_hv > prev_hv:
+        remaining_gap = max(float(true_pareto_hv) - float(next_hv), float(hv_epsilon))
+        hv_term = float(hv_lambda) * (float(next_hv) - float(prev_hv)) / remaining_gap
+
+    fit_term = float(fit_lambda) * archive_fit_mse_reward(
+        archive_true_y=archive_true_y,
+        archive_pred_y=archive_pred_y,
+    )
+    return float(hv_term + fit_term)

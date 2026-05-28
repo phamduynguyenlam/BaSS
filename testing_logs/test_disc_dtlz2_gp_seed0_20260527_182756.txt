@@ -1,0 +1,21 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz2_gp_seed0_20260527_182756.txt
+iter 0 | front = 37 | HV = 8.543843
+iter 1 | front = 37 | HV = 8.543843 | reward = 2.954427
+iter 2 | front = 38 | HV = 8.543843 | reward = 1.673739
+iter 3 | front = 37 | HV = 8.543843 | reward = 1.842408
+iter 4 | front = 35 | HV = 8.543843 | reward = 2.078119
+iter 5 | front = 35 | HV = 8.543843 | reward = -1.000000
+iter 6 | front = 36 | HV = 8.543843 | reward = 1.559808
+iter 7 | front = 33 | HV = 8.543843 | reward = 1.169737
+iter 8 | front = 33 | HV = 8.543843 | reward = -1.000000
+iter 9 | front = 34 | HV = 8.543843 | reward = 2.453363
+iter 10 | front = 34 | HV = 8.543843 | reward = -1.000000
+iter 11 | front = 34 | HV = 8.543843 | reward = -1.000000
+iter 12 | front = 34 | HV = 8.543843 | reward = -1.000000
+iter 13 | front = 35 | HV = 8.543843 | reward = 1.195686
+iter 14 | front = 36 | HV = 8.543843 | reward = 1.812515
+iter 15 | front = 36 | HV = 8.543843 | reward = -1.000000
+iter 16 | front = 36 | HV = 8.543843 | reward = -1.000000
+iter 17 | front = 36 | HV = 8.543843 | reward = -1.000000
+iter 18 | front = 36 | HV = 8.543843 | reward = -1.000000
+iter 19 | front = 37 | HV = 8.543843 | reward = 3.856630

@@ -8,6 +8,7 @@ import numpy as np
 
 from solver.nsga2_solver import run_surrogate_nsga2
 from solver.nsga3_solver import run_surrogate_nsga3
+from solver.moead_solver import run_surrogate_moead
 from solver.usemo_solver import run_surrogate_usemo
 from problem.problem import SUPPORTED_PROBLEMS, make_problem
 from ref_points_hv import get_reference_point
@@ -32,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init_fe", type=int, default=80)
     parser.add_argument("--offspring_size", type=int, default=80)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=30)
-    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "usemo"])
+    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "moead", "usemo"])
     parser.add_argument("--surrogate_model", type=str, default="tabpfn", choices=["gp", "gp2", "tabpfn"])
     parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--gp_nu", type=float, default=5.0)
@@ -139,6 +140,8 @@ def main() -> None:
 
             if solver_name == "nsga3":
                 solver = run_surrogate_nsga3
+            elif solver_name == "moead":
+                solver = run_surrogate_moead
             else:
                 solver = run_surrogate_nsga2
             offspring_x, offspring_pred = solver(

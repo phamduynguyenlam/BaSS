@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from pymoo.algorithms.moo.nsga2 import NSGA2
@@ -8,36 +10,8 @@ from pymoo.core.problem import Problem
 from pymoo.optimize import minimize as pymoo_minimize
 from pymoo.termination import get_termination
 from scipy.stats import norm
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
-
-USEMO_GP_CONFIG: dict[str, object] = {
-    "normalize_x": False,
-    "standardize_y": False,
-    "winsorize_y_quantile": None,
-    "kernel": "rbf",
-    "nu": 0.0,
-    "ard": False,
-    "output_model": "independent_gp_per_objective",
-    "likelihood": "gaussian",
-    "noise_constraint": [1e-5, 5e-2],
-    "initial_noise": 1e-4,
-    "lengthscale_constraint": [0.05, 2.0],
-    "initial_lengthscale": 0.30,
-    "outputscale_constraint": [0.05, 20.0],
-    "max_fit_iter": 80,
-    "num_restarts": 4,
-    "jitter": 1e-6,
-    "surrogate_objective": "mean",
-    "lcb_beta": 0.0,
-    "cheap_solver": "NSGA-II",
-    "surrogate_nsga_steps": 50,
-    "pop_size": 80,
-    "n_restarts": 1,
-    "candidate_pool_size": 80,
-    "keep_top_k": 80,
-    "filter_invalid": False,
-}
+from surrogate.gp import USEMO_GP_CONFIG, fit_gp_surrogates
+from surrogate.surrogate_model import fit_tabpfn_surrogate
 
 
 @dataclass(frozen=True)
@@ -47,175 +21,129 @@ class USEMOResult:
     sigma: np.ndarray
 
 
-def _suppress_gp_warnings() -> None:
-    def warn(*args, **kwargs):
-        return None
+def _resolve_surrogate_nsga_steps(
+    surrogate_nsga_steps: Any,
+    *,
+    n_gen: int | None = None,
+) -> int:
+    if n_gen is not None:
+        return int(n_gen)
 
-    import warnings
+    if surrogate_nsga_steps is None:
+        return int(USEMO_GP_CONFIG["surrogate_nsga_steps"])
 
-    warnings.warn = warn
+    if isinstance(surrogate_nsga_steps, (int, np.integer)):
+        return int(surrogate_nsga_steps)
 
+    if isinstance(surrogate_nsga_steps, dict):
+        if surrogate_nsga_steps.get("gp_nsga_steps", None) is not None:
+            return int(surrogate_nsga_steps["gp_nsga_steps"])
+        if surrogate_nsga_steps.get("surrogate_nsga_steps", None) is not None:
+            return int(surrogate_nsga_steps["surrogate_nsga_steps"])
 
-@dataclass
-class GPFixedInternalSurrogateModel:
-    n_var: int
-    n_obj: int
-    seed: int = 0
-    gps: list[GaussianProcessRegressor] = field(init=False, repr=False)
+    if isinstance(surrogate_nsga_steps, argparse.Namespace) or hasattr(surrogate_nsga_steps, "__dict__"):
+        gp_steps = getattr(surrogate_nsga_steps, "gp_nsga_steps", None)
+        if gp_steps is not None:
+            return int(gp_steps)
+        base_steps = getattr(surrogate_nsga_steps, "surrogate_nsga_steps", None)
+        if base_steps is not None:
+            return int(base_steps)
 
-    def __post_init__(self) -> None:
-        _suppress_gp_warnings()
-        self.n_var = int(self.n_var)
-        self.n_obj = int(self.n_obj)
-        self.seed = int(self.seed)
-        self.gps = []
-
-        for obj_id in range(self.n_obj):
-            kernel = (
-                ConstantKernel(
-                    constant_value=1.0,
-                    constant_value_bounds="fixed",
-                )
-                * RBF(
-                    length_scale=0.5,
-                    length_scale_bounds="fixed",
-                )
-                + WhiteKernel(
-                    noise_level=1e-5,
-                    noise_level_bounds="fixed",
-                )
-            )
-
-            model = GaussianProcessRegressor(
-                kernel=kernel,
-                alpha=1e-6,
-                normalize_y=True,
-                optimizer=None,
-                random_state=self.seed + obj_id,
-            )
-            self.gps.append(model)
-
-    @property
-    def models(self) -> list[GaussianProcessRegressor]:
-        return self.gps
-
-    def fit(self, x: np.ndarray, y: np.ndarray) -> "GPFixedInternalSurrogateModel":
-        x_arr = np.asarray(x, dtype=np.float64)
-        y_arr = np.asarray(y, dtype=np.float64)
-
-        for obj_id, gp in enumerate(self.gps):
-            gp.fit(x_arr, y_arr[:, obj_id])
-        return self
-
-    def predict_mean(self, x: np.ndarray, device: str | None = None) -> np.ndarray:
-        del device
-        x_arr = np.asarray(x, dtype=np.float64)
-        preds = []
-        for gp in self.gps:
-            mean = gp.predict(x_arr, return_std=False)
-            preds.append(np.asarray(mean, dtype=np.float32).reshape(-1))
-        out = np.stack(preds, axis=1).astype(np.float32)
-        return np.maximum(out, 0.0).astype(np.float32)
-
-    def predict_std(self, x: np.ndarray) -> np.ndarray:
-        x_arr = np.asarray(x, dtype=np.float64)
-        preds = []
-        for gp in self.gps:
-            _, std = gp.predict(x_arr, return_std=True)
-            preds.append(np.asarray(std, dtype=np.float32).reshape(-1))
-        return np.stack(preds, axis=1).astype(np.float32) + 1e-6
+    return int(surrogate_nsga_steps)
 
 
-class _ConfiguredUSEMOGP:
-    def __init__(self, *, xl: np.ndarray, xu: np.ndarray):
-        self.xl = np.asarray(xl, dtype=np.float64).reshape(1, -1)
-        self.xu = np.asarray(xu, dtype=np.float64).reshape(1, -1)
-        self.x_span = np.clip(self.xu - self.xl, 1e-12, None)
-        self.y_low: np.ndarray | None = None
-        self.y_high: np.ndarray | None = None
-        self.y_mean: np.ndarray | None = None
-        self.y_scale: np.ndarray | None = None
-        self.model = None
+def _resolve_usemo_option(
+    explicit_value: Any,
+    fallback_source: Any,
+    *,
+    key: str,
+    default: Any,
+) -> Any:
+    if explicit_value is not None and not isinstance(explicit_value, (argparse.Namespace, dict)):
+        return explicit_value
 
-    def _normalize_x(self, x: np.ndarray) -> np.ndarray:
-        x_arr = np.asarray(x, dtype=np.float64)
-        if bool(USEMO_GP_CONFIG["normalize_x"]):
-            return np.clip((x_arr - self.xl) / self.x_span, 0.0, 1.0)
-        return x_arr
+    for source in (explicit_value, fallback_source):
+        if source is None:
+            continue
+        if isinstance(source, dict) and key in source and source[key] is not None:
+            return source[key]
+        if isinstance(source, argparse.Namespace) or hasattr(source, "__dict__"):
+            value = getattr(source, key, None)
+            if value is not None:
+                return value
+    return default
 
-    def _winsorize_y(self, y: np.ndarray) -> np.ndarray:
-        y_arr = np.asarray(y, dtype=np.float64)
-        q_value = USEMO_GP_CONFIG["winsorize_y_quantile"]
-        if q_value is None:
-            self.y_low = np.min(y_arr, axis=0)
-            self.y_high = np.max(y_arr, axis=0)
-            return y_arr
-        q = float(q_value)
-        if q <= 0.0:
-            self.y_low = np.min(y_arr, axis=0)
-            self.y_high = np.max(y_arr, axis=0)
-            return y_arr
-        self.y_low = np.quantile(y_arr, q, axis=0)
-        self.y_high = np.quantile(y_arr, 1.0 - q, axis=0)
-        return np.clip(y_arr, self.y_low, self.y_high)
 
-    def _standardize_y(self, y: np.ndarray) -> np.ndarray:
-        y_arr = np.asarray(y, dtype=np.float64)
-        if bool(USEMO_GP_CONFIG["standardize_y"]):
-            self.y_mean = np.mean(y_arr, axis=0)
-            self.y_scale = np.std(y_arr, axis=0)
-            self.y_scale = np.where(self.y_scale < 1e-8, 1.0, self.y_scale)
-            return (y_arr - self.y_mean) / self.y_scale
-        self.y_mean = np.zeros(y_arr.shape[1], dtype=np.float64)
-        self.y_scale = np.ones(y_arr.shape[1], dtype=np.float64)
-        return y_arr
+def _build_usemo_surrogate(
+    *,
+    problem: Any,
+    archive_x: np.ndarray,
+    archive_y: np.ndarray,
+    seed: int,
+    config_source: Any,
+    surrogate_model: Any | None = None,
+    device: Any | None = None,
+):
+    surrogate_name = str(
+        _resolve_usemo_option(
+            surrogate_model,
+            config_source,
+            key="surrogate_model",
+            default="gp",
+        )
+    ).lower()
+    resolved_device = str(
+        _resolve_usemo_option(
+            device,
+            config_source,
+            key="device",
+            default="cpu",
+        )
+    )
 
-    def fit(self, archive_x: np.ndarray, archive_y: np.ndarray, *, seed: int) -> "_ConfiguredUSEMOGP":
-        x_arr = np.asarray(archive_x, dtype=np.float64)
-        y_arr = np.asarray(archive_y, dtype=np.float64)
-        self.y_low = np.min(y_arr, axis=0)
-        self.y_high = np.max(y_arr, axis=0)
-        self.y_mean = np.zeros(y_arr.shape[1], dtype=np.float64)
-        self.y_scale = np.ones(y_arr.shape[1], dtype=np.float64)
-        self.model = GPFixedInternalSurrogateModel(
-            n_var=int(x_arr.shape[1]),
-            n_obj=int(y_arr.shape[1]),
+    if surrogate_name == "gp":
+        gp_nu = float(_resolve_usemo_option(None, config_source, key="gp_nu", default=5.0))
+        return fit_gp_surrogates(
+            archive_x=archive_x,
+            archive_y=archive_y,
             seed=int(seed),
-        ).fit(x_arr, y_arr)
-        return self
+            nu=gp_nu,
+            variant="gp",
+        )
 
-    def _restore_mean(self, mean: np.ndarray) -> np.ndarray:
-        mean_arr = np.asarray(mean, dtype=np.float64)
-        assert self.y_mean is not None
-        assert self.y_scale is not None
-        restored = mean_arr * self.y_scale.reshape(1, -1) + self.y_mean.reshape(1, -1)
-        return restored.astype(np.float32)
+    if surrogate_name == "gp2":
+        return fit_gp_surrogates(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            seed=int(seed),
+            variant="gp2",
+        )
 
-    def _restore_std(self, std: np.ndarray) -> np.ndarray:
-        std_arr = np.asarray(std, dtype=np.float64)
-        assert self.y_scale is not None
-        restored = std_arr * self.y_scale.reshape(1, -1)
-        return np.maximum(restored, 1e-6).astype(np.float32)
+    if surrogate_name == "gp3":
+        gp3_nu = float(_resolve_usemo_option(None, config_source, key="gp3_nu", default=USEMO_GP_CONFIG["nu"]))
+        return fit_gp_surrogates(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            variant="gp3",
+            xl=np.asarray(problem.xl, dtype=np.float32),
+            xu=np.asarray(problem.xu, dtype=np.float32),
+            seed=int(seed),
+            nu=gp3_nu,
+        )
 
-    def predict_mean(self, x: np.ndarray) -> np.ndarray:
-        assert self.model is not None
-        x_arr = self._normalize_x(np.asarray(x, dtype=np.float64))
-        mean = np.asarray(self.model.predict_mean(x_arr), dtype=np.float64)
-        return self._restore_mean(mean)
+    if surrogate_name == "tabpfn":
+        n_estimators = int(_resolve_usemo_option(None, config_source, key="ensemble_model", default=8))
+        return fit_tabpfn_surrogate(
+            archive_x=archive_x,
+            archive_y=archive_y,
+            device=resolved_device,
+            n_estimators=n_estimators,
+        )
 
-    def predict_std(self, x: np.ndarray) -> np.ndarray:
-        assert self.model is not None
-        x_arr = self._normalize_x(np.asarray(x, dtype=np.float64))
-        std = np.asarray(self.model.predict_std(x_arr), dtype=np.float64)
-        return self._restore_std(std)
+    if surrogate_name == "kan":
+        raise ValueError("USEMO does not support surrogate_model='kan' because acquisition requires predict_std().")
 
-    def incumbent(self) -> np.ndarray:
-        assert self.y_low is not None
-        assert self.y_high is not None
-        assert self.y_mean is not None
-        assert self.y_scale is not None
-        y_ref = np.clip(self.y_mean.reshape(1, -1), self.y_low.reshape(1, -1), self.y_high.reshape(1, -1))
-        return y_ref.reshape(-1).astype(np.float32)
+    raise ValueError(f"Unsupported USEMO surrogate_model: {surrogate_name}")
 
 
 def _dominates(lhs: np.ndarray, rhs: np.ndarray) -> bool:
@@ -316,25 +244,31 @@ def run_surrogate_usemo(
     n_gen=None,
     acquisition="ei",
     beta=None,
+    surrogate_model=None,
+    device=None,
 ):
     acquisition_name = str(acquisition).lower()
     if acquisition_name not in {"lcb", "ei"}:
         raise ValueError(f"USEMO solver supports only acquisition in {{'lcb', 'ei'}}, got {acquisition}.")
 
-    if n_gen is not None:
-        surrogate_nsga_steps = n_gen
-    if surrogate_nsga_steps is None:
-        surrogate_nsga_steps = int(USEMO_GP_CONFIG["surrogate_nsga_steps"])
+    resolved_nsga_steps = _resolve_surrogate_nsga_steps(
+        surrogate_nsga_steps,
+        n_gen=n_gen,
+    )
     effective_beta = float(USEMO_GP_CONFIG["lcb_beta"] if beta is None else beta)
 
     archive_x_arr = np.asarray(archive_x, dtype=np.float64)
     archive_y_arr = np.asarray(archive_y, dtype=np.float64)
     xl = np.asarray(problem.xl, dtype=np.float32)
     xu = np.asarray(problem.xu, dtype=np.float32)
-    gp_suite = _ConfiguredUSEMOGP(xl=xl, xu=xu).fit(
+    gp_suite = _build_usemo_surrogate(
+        problem=problem,
         archive_x=archive_x_arr,
         archive_y=archive_y_arr,
         seed=int(seed),
+        config_source=surrogate_nsga_steps,
+        surrogate_model=surrogate_model,
+        device=device,
     )
 
     surrogate_problem = _USEMOProblem(
@@ -361,7 +295,7 @@ def run_surrogate_usemo(
         res = pymoo_minimize(
             surrogate_problem,
             algorithm,
-            termination=get_termination("n_gen", int(surrogate_nsga_steps)),
+            termination=get_termination("n_gen", int(resolved_nsga_steps)),
             seed=int(seed) + int(restart_id),
             verbose=False,
             save_history=False,

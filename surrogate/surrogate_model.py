@@ -57,16 +57,19 @@ def build_dataset(x: np.ndarray, y: np.ndarray, device: str) -> dict[str, torch.
     }
 
 
-class SurrogateModel(ABC):
+class Surrogate(ABC):
     @abstractmethod
     def predict_mean(self, x: np.ndarray, device: str | None = None) -> np.ndarray: ...
 
     def predict_std(self, x: np.ndarray) -> np.ndarray:
         raise NotImplementedError
 
+    def refit(self, x: np.ndarray, y: np.ndarray) -> "Surrogate":
+        raise NotImplementedError
+
 
 @dataclass
-class KANSurrogateModel(SurrogateModel):
+class KANSurrogateModel(Surrogate):
     models: list[KAN]
     device: str
 
@@ -74,9 +77,12 @@ class KANSurrogateModel(SurrogateModel):
         dev = self.device if device is None else str(device)
         return predict_with_kan(self.models, x, dev)
 
+    def refit(self, x: np.ndarray, y: np.ndarray) -> "KANSurrogateModel":
+        raise NotImplementedError("KANSurrogateModel does not implement in-place refit; rebuild it via fit_kan_surrogates().")
+
 
 @dataclass
-class TabPFNSurrogateModel(SurrogateModel):
+class TabPFNSurrogateModel(Surrogate):
     model: Any
 
     def predict_mean(self, x: np.ndarray, device: str | None = None) -> np.ndarray:
@@ -86,6 +92,12 @@ class TabPFNSurrogateModel(SurrogateModel):
         if not hasattr(self.model, "predict_std"):
             raise NotImplementedError("TabPFN surrogate wrapper requires predict_std().")
         return np.asarray(self.model.predict_std(np.asarray(x, dtype=np.float32)), dtype=np.float32)
+
+    def refit(self, x: np.ndarray, y: np.ndarray) -> "TabPFNSurrogateModel":
+        if not hasattr(self.model, "fit"):
+            raise NotImplementedError("Wrapped TabPFN surrogate does not implement fit().")
+        self.model.fit(np.asarray(x, dtype=np.float32), np.asarray(y, dtype=np.float32))
+        return self
 
 
 def fit_kan_surrogates(
@@ -519,7 +531,7 @@ def build_tabpfn_surrogate(
     return TabPFNSurrogate(objective_models=models, bin_edges=bin_edges, debug=bool(debug))
 
 
-class TabPFNMinMaxSurrogate:
+class TabPFNMinMaxSurrogate(Surrogate):
     """TabPFN surrogate with per-fit min-max normalization and fixed 10-bin targets on [0, 1]."""
 
     def __init__(
@@ -643,9 +655,16 @@ class TabPFNMinMaxSurrogate:
         mean, _ = self.predict_mean_std(x)
         return mean
 
+    def predict_mean(self, x: np.ndarray, device: str | None = None) -> np.ndarray:
+        del device
+        return self.predict(x)
+
     def predict_std(self, x: np.ndarray) -> np.ndarray:
         _, std = self.predict_mean_std(x)
         return std
+
+    def refit(self, x: np.ndarray, y: np.ndarray) -> "TabPFNMinMaxSurrogate":
+        return self.fit(x, y)
 
     @property
     def n_train_samples(self) -> int:
@@ -1196,12 +1215,12 @@ def predict_multi_context(
     )
 
 
-from surrogate.gp import GP2SurrogateModel, GPSurrogateModel, fit_gp2_surrogates, fit_gp_surrogates, predict_with_gp_mean, predict_with_gp_std
+from surrogate.gp import GPSurrogateModel, USEMO_GP_CONFIG, fit_gp_surrogates, predict_with_gp_mean, predict_with_gp_std
 
 
 # Backwards/ergonomic aliases (requested names)
-surrogate_model = SurrogateModel
+surrogate_model = Surrogate
+SurrogateModel = Surrogate
 gp = GPSurrogateModel
-gp2 = GP2SurrogateModel
 kan = KANSurrogateModel
 tabpfn = TabPFNSurrogateModel

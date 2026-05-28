@@ -48,7 +48,7 @@ def make_logger(log_path: Path):
 def default_log_path(args: argparse.Namespace) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     stem = (
-        f"usemo_{str(args.problem).lower()}_{str(args.nsga_af).lower()}_"
+        f"usemo_{str(args.problem).lower()}_{str(args.surrogate_model).lower()}_{str(args.nsga_af).lower()}_"
         f"seed{int(args.seed)}_{timestamp}.txt"
     )
     return Path("baseline_logs") / stem
@@ -61,10 +61,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--problem", type=str, default="DTLZ6", choices=SUPPORTED_PROBLEMS)
     parser.add_argument("--dim", type=int, default=30)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--max_fe", type=int, default=120)
     parser.add_argument("--init_fe", type=int, default=80)
     parser.add_argument("--surrogate_nsga_steps", type=int, default=100)
     parser.add_argument("--offspring_size", type=int, default=80)
+    parser.add_argument("--surrogate_model", type=str, default="gp3", choices=["gp", "gp2", "gp3", "tabpfn"])
+    parser.add_argument("--gp_nu", type=float, default=5.0)
+    parser.add_argument("--ensemble_model", type=int, default=8)
     parser.add_argument("--nsga_af", type=str, default="ei", choices=["lcb", "ei"])
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--output_json", type=str, default=None)
@@ -140,6 +144,7 @@ def main() -> None:
 
         logger(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
         logger("candidate_solver = usemo")
+        logger(f"surrogate_model = {str(args.surrogate_model).lower()}")
         logger(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
         logger(f"surrogate_nsga_steps = {int(args.surrogate_nsga_steps)}")
 
@@ -154,10 +159,12 @@ def main() -> None:
                 archive_x=archive_x,
                 archive_y=archive_y,
                 pop_size=int(args.offspring_size),
-                surrogate_nsga_steps=int(args.surrogate_nsga_steps),
+                surrogate_nsga_steps=args,
                 seed=int(args.seed) + int(step),
                 acquisition=str(args.nsga_af).lower(),
                 beta=float(args.beta),
+                surrogate_model=args,
+                device=args,
             )
             uncertainty = aggregate_uncertainty(pareto_sigma)
             selected_idx = int(np.argmax(uncertainty))
@@ -195,6 +202,7 @@ def main() -> None:
             "init_fe": int(args.init_fe),
             "max_fe": int(args.max_fe),
             "offspring_size": int(args.offspring_size),
+            "surrogate_model": str(args.surrogate_model).lower(),
             "surrogate_nsga_steps": int(args.surrogate_nsga_steps),
             "acquisition": str(args.nsga_af).lower(),
             "beta": float(args.beta),

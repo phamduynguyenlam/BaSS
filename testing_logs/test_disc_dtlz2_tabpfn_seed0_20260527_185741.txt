@@ -1,0 +1,7 @@
+test_log_path = C:\Users\dauma\OneDrive\Documents\HUST\Research\code\DISC-main\testing_logs\test_disc_dtlz2_tabpfn_seed0_20260527_185741.txt
+iter 0 | front = 37 | HV = 8.543843
+iter 1 | front = 37 | HV = 8.584093 | reward = 2.182622
+iter 2 | front = 33 | HV = 9.156039 | reward = 3.110706
+iter 3 | front = 34 | HV = 9.266924 | reward = 1.615161
+iter 4 | front = 35 | HV = 9.538532 | reward = 3.220579
+iter 5 | front = 31 | HV = 10.068801 | reward = 3.159711
