@@ -65,15 +65,16 @@ class MetaAgent(nn.Module):
         self.logit_scale = float(logit_scale)
         self.epsilon = float(epsilon)
 
-        self.W_ela = nn.Linear(4, self.hidden_dim)
-        self.encoder_ela = LandscapeEncoder(self.hidden_dim, self.n_heads, self.ff_dim, self.dropout)
+        self.W_true = nn.Linear(2, self.hidden_dim)
+        self.W_prevsurr = nn.Linear(3, self.hidden_dim)
+        self.encoder_true = LandscapeEncoder(self.hidden_dim, self.n_heads, self.ff_dim, self.dropout)
+        self.encoder_prevsurr = LandscapeEncoder(self.hidden_dim, self.n_heads, self.ff_dim, self.dropout)
         self.q_decoder = DuelingActionDecoder(
             state_dim=2 * self.hidden_dim + 3,
             hidden_dim=int(decoder_hidden_dim),
             n_actions=len(self.ACTION_STEPS),
             dropout=self.dropout,
         )
-        self.ela_start_token = nn.Parameter(torch.zeros(1, self.hidden_dim))
         self.start_action_token = nn.Parameter(torch.zeros(1, 1))
         self.start_reward_token = nn.Parameter(torch.zeros(1, 1))
 
@@ -120,26 +121,6 @@ class MetaAgent(nn.Module):
             value_tensor[start_mask] = fallback.to(device=device, dtype=dtype).view(1)
         return value_tensor
 
-    def _prepare_previous_ela(self, prev_ela, device, dtype, batch_size: int) -> torch.Tensor:
-        start = self.ela_start_token.to(device=device, dtype=dtype).expand(int(batch_size), -1)
-        if prev_ela is None:
-            return start
-
-        ela_tensor = torch.as_tensor(prev_ela, device=device, dtype=dtype)
-        if ela_tensor.dim() == 1:
-            if ela_tensor.numel() == self.hidden_dim:
-                ela_tensor = ela_tensor.view(1, -1).expand(int(batch_size), -1)
-            else:
-                ela_tensor = ela_tensor.reshape(int(batch_size), -1)
-        elif ela_tensor.dim() != 2:
-            raise ValueError(f"prev_ela must have shape [B, h] or [h], got {tuple(ela_tensor.shape)}.")
-
-        if ela_tensor.size(1) != self.hidden_dim:
-            raise ValueError(f"prev_ela width mismatch: {ela_tensor.size(1)} vs {self.hidden_dim}.")
-
-        row_has_nan = torch.isnan(ela_tensor).any(dim=1, keepdim=True)
-        return torch.where(row_has_nan, start, ela_tensor)
-
     def _prepare_inputs(
         self,
         x_true,
@@ -152,7 +133,6 @@ class MetaAgent(nn.Module):
         archive_mask=None,
         candidate_mask=None,
     ):
-        del candidate_mask
         x_true = self._ensure_batch(x_true).float()
         y_true = self._ensure_batch(y_true).float()
         x_sur = self._ensure_batch(x_sur).float()
@@ -165,10 +145,9 @@ class MetaAgent(nn.Module):
         n_dim = x_true.size(-1)
         n_archive = x_true.size(1)
 
-        if x_sur.size(1) != n_archive:
-            raise ValueError(f"x_sur must align with archive size, got {x_sur.size(1)} vs {n_archive}.")
-        if y_sur.size(1) != n_archive or sigma_sur.size(1) != n_archive:
-            raise ValueError("y_sur and sigma_sur must align with archive size.")
+        n_prev = x_sur.size(1)
+        if y_sur.size(1) != n_prev or sigma_sur.size(1) != n_prev:
+            raise ValueError("y_sur and sigma_sur must align with x_sur.")
 
         if archive_mask is not None:
             archive_mask = torch.as_tensor(archive_mask, device=device, dtype=torch.bool)
@@ -176,6 +155,12 @@ class MetaAgent(nn.Module):
                 archive_mask = archive_mask.view(1, -1).expand(batch_size, -1)
             if archive_mask.size(1) != n_archive:
                 raise ValueError(f"archive_mask width mismatch: {archive_mask.size(1)} vs {n_archive}")
+        if candidate_mask is not None:
+            candidate_mask = torch.as_tensor(candidate_mask, device=device, dtype=torch.bool)
+            if candidate_mask.dim() == 1:
+                candidate_mask = candidate_mask.view(1, -1).expand(batch_size, -1)
+            if candidate_mask.size(1) != n_prev:
+                raise ValueError(f"candidate_mask width mismatch: {candidate_mask.size(1)} vs {n_prev}")
 
         lower = torch.as_tensor(lower_bound, device=device, dtype=dtype)
         upper = torch.as_tensor(upper_bound, device=device, dtype=dtype)
@@ -194,30 +179,36 @@ class MetaAgent(nn.Module):
         upper = upper.unsqueeze(1)
 
         x_true_norm = self._normalize_by_range(x_true, lower, upper)
-        y_stacked = torch.cat([y_true, y_sur], dim=1)
-        y_min = y_stacked.amin(dim=1, keepdim=True)
-        y_max = y_stacked.amax(dim=1, keepdim=True)
-        y_true_norm = ((y_true - y_min) / (y_max - y_min).clamp_min(1e-12)).clamp(0.0, 1.0)
-        y_sur_norm = ((y_sur - y_min) / (y_max - y_min).clamp_min(1e-12)).clamp(0.0, 1.0)
+        x_sur_norm = self._normalize_by_range(x_sur, lower, upper)
+        y_true_norm = self._min_max_normalize(y_true)
+        y_sur_norm = self._min_max_normalize(y_sur)
         sigma_sur_norm = self._min_max_normalize(sigma_sur)
 
-        x_expand = x_true_norm.transpose(1, 2).unsqueeze(1).unsqueeze(-1)
-        x_expand = x_expand.expand(-1, y_true_norm.size(-1), -1, -1, -1)
+        x_true_expand = x_true_norm.transpose(1, 2).unsqueeze(1).unsqueeze(-1)
+        x_true_expand = x_true_expand.expand(-1, y_true_norm.size(-1), -1, -1, -1)
         y_true_expand = y_true_norm.transpose(1, 2).unsqueeze(2).unsqueeze(-1)
         y_true_expand = y_true_expand.expand(-1, -1, x_true_norm.size(-1), -1, -1)
+        e_true = torch.cat((x_true_expand, y_true_expand), dim=-1)
+
+        x_sur_expand = x_sur_norm.transpose(1, 2).unsqueeze(1).unsqueeze(-1)
+        x_sur_expand = x_sur_expand.expand(-1, y_sur_norm.size(-1), -1, -1, -1)
         y_sur_expand = y_sur_norm.transpose(1, 2).unsqueeze(2).unsqueeze(-1)
-        y_sur_expand = y_sur_expand.expand(-1, -1, x_true_norm.size(-1), -1, -1)
+        y_sur_expand = y_sur_expand.expand(-1, -1, x_sur_norm.size(-1), -1, -1)
         sigma_expand = sigma_sur_norm.transpose(1, 2).unsqueeze(2).unsqueeze(-1)
-        sigma_expand = sigma_expand.expand(-1, -1, x_true_norm.size(-1), -1, -1)
-        e_archive = torch.cat((x_expand, y_true_expand, y_sur_expand, sigma_expand), dim=-1)
+        sigma_expand = sigma_expand.expand(-1, -1, x_sur_norm.size(-1), -1, -1)
+        e_prevsurr = torch.cat((x_sur_expand, y_sur_expand, sigma_expand), dim=-1)
 
         if archive_mask is None:
             archive_mask = torch.ones(batch_size, n_archive, device=device, dtype=torch.bool)
+        if candidate_mask is None:
+            candidate_mask = torch.ones(batch_size, n_prev, device=device, dtype=torch.bool)
 
         return {
-            "E_archive": e_archive,
+            "E_true": e_true,
+            "E_prevsurr": e_prevsurr,
             "dim_mask": dim_mask,
             "archive_mask": archive_mask,
+            "candidate_mask": candidate_mask,
             "device": device,
             "dtype": dtype,
             "batch_size": batch_size,
@@ -243,7 +234,6 @@ class MetaAgent(nn.Module):
         upper_bound,
         prev_action=None,
         prev_reward=None,
-        prev_ela=None,
         archive_mask=None,
         candidate_mask=None,
     ):
@@ -259,19 +249,19 @@ class MetaAgent(nn.Module):
             candidate_mask=candidate_mask,
         )
 
-        h_archive = self.encoder_ela(
-            self.W_ela(prepared["E_archive"]),
+        h_true = self.encoder_true(
+            self.W_true(prepared["E_true"]),
             dim_mask=prepared["dim_mask"],
             individual_mask=prepared["archive_mask"],
         )
-
-        ela_current = self._masked_pool_over_individuals(h_archive, prepared["archive_mask"]).mean(dim=1)
-        ela_previous = self._prepare_previous_ela(
-            prev_ela=prev_ela,
-            device=prepared["device"],
-            dtype=prepared["dtype"],
-            batch_size=prepared["batch_size"],
+        h_prevsurr = self.encoder_prevsurr(
+            self.W_prevsurr(prepared["E_prevsurr"]),
+            dim_mask=prepared["dim_mask"],
+            individual_mask=prepared["candidate_mask"],
         )
+
+        ela_current = self._masked_pool_over_individuals(h_true, prepared["archive_mask"]).mean(dim=1)
+        ela_previous = self._masked_pool_over_individuals(h_prevsurr, prepared["candidate_mask"]).mean(dim=1)
         prev_action_state = self._prepare_scalar_token(
             value=prev_action,
             device=prepared["device"],
@@ -295,9 +285,10 @@ class MetaAgent(nn.Module):
 
         z = torch.cat([ela_current, ela_previous, prev_action_state, prev_reward_state, progress_state], dim=-1)
         return {
-            "H_ela": h_archive,
+            "H_true": h_true,
+            "H_prevsurr": h_prevsurr,
             "ela": ela_current,
-            "prev_ela": ela_previous,
+            "prev_surrogate_ela": ela_previous,
             "prev_action": prev_action_state,
             "prev_reward": prev_reward_state,
             "progress": progress_state,
@@ -351,7 +342,6 @@ class MetaAgent(nn.Module):
         upper_bound,
         prev_action=None,
         prev_reward=None,
-        prev_ela=None,
         archive_mask=None,
         candidate_mask=None,
         decode_type="epsilon_greedy",
@@ -368,7 +358,6 @@ class MetaAgent(nn.Module):
             upper_bound=upper_bound,
             prev_action=prev_action,
             prev_reward=prev_reward,
-            prev_ela=prev_ela,
             archive_mask=archive_mask,
             candidate_mask=candidate_mask,
         )

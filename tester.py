@@ -805,7 +805,6 @@ def run_policy_rollout(
     logger(f"{prefix}iter 0 | front = {int(pareto_front(archive_y).shape[0])} | HV = {hv_history[-1]:.6f}")
     prev_action = np.array([np.nan], dtype=np.float32)
     prev_reward = np.array([np.nan], dtype=np.float32)
-    prev_ela = np.full((int(getattr(disc, "hidden_dim", getattr(args, "hidden_dim", 64))),), np.nan, dtype=np.float32)
 
     for step in range(n_evo_steps):
         chosen_steps = None
@@ -821,30 +820,27 @@ def run_policy_rollout(
             if disc is None:
                 raise ValueError("BaSS rollout requires a built disc model.")
             progress = float(step) / float(max(n_evo_steps - 1, 1))
-            state_surrogate = build_surrogate(args, archive_x, archive_y)
-            archive_pred, archive_sigma = build_archive_surrogate_stats(
-                archive_x=archive_x,
-                archive_y=archive_y,
-                surrogate=state_surrogate,
+            test_gp_pred, test_gp_sigma = build_archive_surrogate_stats(
+                archive_x=test_gp_x,
+                archive_y=test_gp_y,
+                surrogate=gp_val,
             )
             with torch.no_grad():
                 out = disc(
                     x_true=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
                     y_true=torch.from_numpy(archive_y).to(device=args.device, dtype=torch.float32),
-                    x_sur=torch.from_numpy(archive_x).to(device=args.device, dtype=torch.float32),
-                    y_sur=torch.from_numpy(archive_pred).to(device=args.device, dtype=torch.float32),
-                    sigma_sur=torch.from_numpy(archive_sigma).to(device=args.device, dtype=torch.float32),
+                    x_sur=torch.from_numpy(test_gp_x).to(device=args.device, dtype=torch.float32),
+                    y_sur=torch.from_numpy(test_gp_pred).to(device=args.device, dtype=torch.float32),
+                    sigma_sur=torch.from_numpy(test_gp_sigma).to(device=args.device, dtype=torch.float32),
                     progress=progress,
                     prev_action=prev_action,
                     prev_reward=prev_reward,
-                    prev_ela=prev_ela,
                     lower_bound=np.full(int(args.dim), float(problem.lower), dtype=np.float32),
                     upper_bound=np.full(int(args.dim), float(problem.upper), dtype=np.float32),
                     decode_type="epsilon_greedy",
                     epsilon=0.05,
                 )
                 action_idx = int(out["action"].reshape(-1)[0].item())
-                prev_ela = out["ela"].reshape(-1).detach().cpu().numpy().astype(np.float32)
             chosen_steps = int(Disc.action_to_surrogate_nsga_steps(action_idx))
             local_args = argparse.Namespace(**vars(args))
             local_args.surrogate_nsga_steps = chosen_steps
