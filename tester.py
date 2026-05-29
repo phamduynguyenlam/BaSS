@@ -13,8 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+from agents.bass import Bass, BassAF
 from agents.db_saea import DBSAEAAgent
-from agents.meta import Disc, DiscAF
 from infill import (
     EPDIExploitation,
     EPDIExploration,
@@ -242,10 +242,14 @@ def _format_debug_array(name: str, value: np.ndarray) -> str:
 
 def resolve_agent_cls(agent_name: str):
     name = str(agent_name).strip().lower()
+    if name == "bass":
+        return Bass
+    if name == "bass_af":
+        return BassAF
     if name == "disc":
-        return Disc
+        return Bass
     if name == "disc_af":
-        return DiscAF
+        return BassAF
     if name == "db_saea":
         return DBSAEAAgent
     raise ValueError(f"Unsupported agent_name: {agent_name}")
@@ -253,6 +257,10 @@ def resolve_agent_cls(agent_name: str):
 
 def output_agent_tag(agent_name: str) -> str:
     name = str(agent_name).strip().lower()
+    if name == "bass":
+        return "bass"
+    if name == "bass_af":
+        return "bass_af"
     if name == "disc":
         return "bass"
     if name == "disc_af":
@@ -643,7 +651,7 @@ def build_disc(
     args: argparse.Namespace,
     *,
     map_location: str,
-    agent_name: str = "disc",
+    agent_name: str = "bass",
 ) -> tuple[Any, dict[str, float]]:
     agent_cls = resolve_agent_cls(agent_name)
     model_to_device_started_at = time.perf_counter()
@@ -816,7 +824,7 @@ def run_policy_rollout(
             step=step,
         )
 
-        if policy_name.lower() == "disc":
+        if policy_name.lower() in {"disc", "bass"}:
             if disc is None:
                 raise ValueError("BaSS rollout requires a built disc model.")
             progress = float(step) / float(max(n_evo_steps - 1, 1))
@@ -841,7 +849,7 @@ def run_policy_rollout(
                     epsilon=0.05,
                 )
                 action_idx = int(out["action"].reshape(-1)[0].item())
-            chosen_steps = int(Disc.action_to_surrogate_nsga_steps(action_idx))
+            chosen_steps = int(Bass.action_to_surrogate_nsga_steps(action_idx))
             local_args = argparse.Namespace(**vars(args))
             local_args.surrogate_nsga_steps = chosen_steps
             offspring_x, offspring_pred, offspring_sigma, offspring_groups = generate_offspring_pool(
@@ -967,7 +975,7 @@ def run_policy_rollout(
         )
         history.append(record)
         step_rewards.append(step_reward)
-        prev_action = np.array([float(action_idx)], dtype=np.float32) if policy_name.lower() == "disc" else prev_action
+        prev_action = np.array([float(action_idx)], dtype=np.float32) if policy_name.lower() in {"disc", "bass"} else prev_action
         prev_reward = np.array([float(step_reward)], dtype=np.float32)
         reward_component_str = ", ".join(
             f"{comp_key}={comp_value:.6f}"
@@ -1094,7 +1102,7 @@ def plot_results(
     archive_y: np.ndarray,
     true_pareto: np.ndarray | None,
 ) -> str:
-    agent_tag = output_agent_tag(str(getattr(args, "agent_name", "disc")))
+    agent_tag = output_agent_tag(str(getattr(args, "agent_name", "bass")))
     plot_path = args.plot_path
     if plot_path is None:
         plot_path = str(Path("png") / f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}.png")
@@ -1182,7 +1190,7 @@ def plot_compare_results(
     baseline_label: str,
     true_pareto: np.ndarray | None,
 ) -> str:
-    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
+    agent_tag = output_agent_tag(str(getattr(args, "agent_name", "bass")))
     plot_path = args.plot_path
     if plot_path is None:
         plot_path = str(Path("png") / f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}_compare.png")
@@ -1257,7 +1265,7 @@ def save_npy_outputs(
 ) -> dict[str, str]:
     out_dir = Path("npy")
     out_dir.mkdir(parents=True, exist_ok=True)
-    agent_tag = output_agent_tag(str(getattr(args, "agent_name", "disc")))
+    agent_tag = output_agent_tag(str(getattr(args, "agent_name", "bass")))
     stem = f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}"
 
     paths = {
@@ -1277,7 +1285,7 @@ def save_npy_outputs(
     return {key: str(path.resolve()) for key, path in paths.items()}
 
 
-def main(agent_name: str = "disc") -> None:
+def main(agent_name: str = "bass") -> None:
     args = parse_args()
     args.agent_name = str(agent_name).lower()
     set_seed(int(args.seed))
@@ -1358,7 +1366,7 @@ def main(agent_name: str = "disc") -> None:
             true_pareto=true_pareto,
             archive_x_init=archive_x,
             archive_y_init=archive_y,
-            policy_name="disc",
+            policy_name="bass",
             disc=disc,
             compare_mode=bool(compare_infill_name),
             make_plot=not bool(compare_infill_name),

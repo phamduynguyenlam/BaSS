@@ -14,8 +14,8 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
+from agents.bass import Bass, BassAF
 from agents.db_saea import DBSAEAAgent
-from agents.meta import Disc, DiscAF
 from solver.nsga3_solver import run_surrogate_nsga3
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
@@ -54,6 +54,8 @@ class TrainConfig:
     gamma: float = 1.0
     lr: float = 1e-4
     target_update_interval: int = 20
+    target_tau: float = 1e-3
+    hard_update: bool = False
     train_iters: int = 50
     updates_per_epoch: int = 80
     epsilon_start: float = 0.3
@@ -83,7 +85,7 @@ class TrainConfig:
     rollout_device: str = "cpu"
     surrogate_device: str = "cpu"
     ensemble_model: int = 8
-    agent_name: str = "disc"
+    agent_name: str = "bass"
     agent_pth: str | None = None
 
 
@@ -120,10 +122,14 @@ def clone_state_dict_cpu(model):
 
 def resolve_agent_cls(agent_name):
     name = str(agent_name).strip().lower()
+    if name == "bass":
+        return Bass
+    if name == "bass_af":
+        return BassAF
     if name == "disc":
-        return Disc
+        return Bass
     if name == "disc_af":
-        return DiscAF
+        return BassAF
     if name == "db_saea":
         return DBSAEAAgent
     raise ValueError(f"Unsupported agent_name: {agent_name}")
@@ -136,6 +142,15 @@ def output_agent_tag(agent_name: str) -> str:
     if name == "disc_af":
         return "bass_af"
     return name
+
+
+def soft_update_target_network(target_agent, online_agent, tau: float) -> None:
+    tau_value = float(tau)
+    with torch.no_grad():
+        for target_param, online_param in zip(target_agent.parameters(), online_agent.parameters()):
+            target_param.data.mul_(1.0 - tau_value).add_(online_param.data, alpha=tau_value)
+        for target_buffer, online_buffer in zip(target_agent.buffers(), online_agent.buffers()):
+            target_buffer.copy_(online_buffer)
 
 
 def select_action_from_output(out):
@@ -151,6 +166,7 @@ def parse_args():
     parser.add_argument("--dim", type=int, default=30)
     parser.add_argument("--epoch", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=None)
+    parser.add_argument("--hard_update", action="store_true")
     parser.add_argument("--reward_scheme", type=int, default=3, choices=[1, 2, 3])
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--reward_lambda1", type=float, default=25.0)
@@ -1018,7 +1034,7 @@ class DiscSAEAEnv:
     def step(self, action_idx, state):
         if state is not None:
             self.prev_action = np.array([float(action_idx)], dtype=np.float32)
-        self.active_surrogate_nsga_steps = int(Disc.action_to_surrogate_nsga_steps(int(action_idx)))
+        self.active_surrogate_nsga_steps = int(Bass.action_to_surrogate_nsga_steps(int(action_idx)))
         self._refresh_offspring()
         chosen_idx = self._select_candidate_index()
         previous_archive_y = np.asarray(self.archive_y, dtype=np.float32).copy()
@@ -1075,7 +1091,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
     task_started_at = time.perf_counter()
     worker_pid = os.getpid()
     device = str(cfg_dict.get("rollout_device", "cpu"))
-    agent_cls = resolve_agent_cls(cfg_dict.get("agent_name", "disc"))
+    agent_cls = resolve_agent_cls(cfg_dict.get("agent_name", "bass"))
     agent = agent_cls(
         hidden_dim=cfg_dict["hidden_dim"],
         n_heads=cfg_dict["n_heads"],
@@ -1120,7 +1136,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
             )
 
         action = select_action_from_output(out)
-        chosen_sur_steps_history.append(int(Disc.action_to_surrogate_nsga_steps(action)))
+        chosen_sur_steps_history.append(int(Bass.action_to_surrogate_nsga_steps(action)))
         next_state, reward, done = env.step(action, state)
         for key, value in env.last_reward_breakdown.items():
             reward_component_history.setdefault(str(key), []).append(float(value))
@@ -1218,7 +1234,7 @@ def save_training_checkpoint(
     rs_tag = f"rs{int(cfg.reward_scheme)}"
     hidden_tag = f"h{int(cfg.hidden_dim)}"
     problem_tag = str(problem_name).lower()
-    agent_tag = output_agent_tag(str(getattr(cfg, "agent_name", "disc")))
+    agent_tag = output_agent_tag(str(getattr(cfg, "agent_name", "bass")))
     file_prefix = f"{agent_tag}_problem_{problem_tag}_{rs_tag}_{hidden_tag}"
 
     if mean_reward > best_reward:
@@ -1257,6 +1273,7 @@ def train_disc_ddqn_ray(
     dim=30,
     epoch=None,
     gamma=None,
+    hard_update=False,
     reward_scheme=3,
     reward_lambda=10.0,
     reward_lambda1=25.0,
@@ -1271,7 +1288,7 @@ def train_disc_ddqn_ray(
     rollout_device="cpu",
     surrogate_device="cpu",
     use_ray=False,
-    agent_name="disc",
+    agent_name="bass",
     agent_pth=None,
 ):
     cfg = TrainConfig()
@@ -1279,6 +1296,7 @@ def train_disc_ddqn_ray(
         cfg.train_iters = int(epoch)
     if gamma is not None:
         cfg.gamma = float(gamma)
+    cfg.hard_update = bool(hard_update)
     cfg.reward_scheme = int(reward_scheme)
     cfg.reward_lambda = float(reward_lambda)
     cfg.reward_lambda1 = float(reward_lambda1)
@@ -1312,6 +1330,8 @@ def train_disc_ddqn_ray(
     cfg_dict = cfg.__dict__.copy()
     os.makedirs("training_logs", exist_ok=True)
     log_subdir_map = {
+        "bass": "bass",
+        "bass_af": "bass_af",
         "disc": "bass",
         "disc_af": "bass_af",
         "db_saea": "db-saea",
@@ -1323,7 +1343,7 @@ def train_disc_ddqn_ray(
     os.makedirs(log_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_tag = output_agent_tag(cfg.agent_name)
-    log_prefix = f"{output_tag}_trainer" if str(cfg.agent_name) != "disc" else "bass_trainer"
+    log_prefix = f"{output_tag}_trainer"
     log_path = os.path.join(
         log_dir,
         f"{log_prefix}_{cfg.heldout_problem.lower()}_set{cfg.training_set}_{ts}.txt",
@@ -1402,6 +1422,8 @@ def train_disc_ddqn_ray(
         f"replay_size={cfg.replay_size} | "
         f"gamma={cfg.gamma:.4f} | "
         f"target_update={cfg.target_update_interval} | "
+        f"target_sync={'hard' if cfg.hard_update else 'soft'} | "
+        f"target_tau={cfg.target_tau:.4f} | "
         f"agent_pth={cfg.agent_pth if cfg.agent_pth else '-'} | "
         f"resume_epoch={resume_epoch} | "
         f"resume_best_reward={int(resume_is_best_reward)} | "
@@ -1603,6 +1625,8 @@ def train_disc_ddqn_ray(
             loss.backward()
             grad_norm = float(torch.nn.utils.clip_grad_norm_(agent.parameters(), 1.0))
             optimizer.step()
+            if not bool(cfg.hard_update):
+                soft_update_target_network(target_agent, agent, tau=cfg.target_tau)
 
             update_metrics = {
                 "td_loss": float(loss.item()),
@@ -1619,7 +1643,7 @@ def train_disc_ddqn_ray(
             }
             update_metrics_list.append(update_metrics)
 
-        if it % cfg.target_update_interval == 0:
+        if bool(cfg.hard_update) and it % cfg.target_update_interval == 0:
             target_agent.load_state_dict(agent.state_dict())
         update_elapsed = time.perf_counter() - update_start_time
 
@@ -1714,6 +1738,7 @@ if __name__ == "__main__":
         dim=int(args.dim),
         epoch=args.epoch,
         gamma=args.gamma,
+        hard_update=bool(args.hard_update),
         reward_scheme=int(args.reward_scheme),
         reward_lambda=float(args.reward_lambda),
         reward_lambda1=float(args.reward_lambda1),
