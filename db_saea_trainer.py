@@ -15,7 +15,7 @@ import torch.optim as optim
 import numpy as np
 
 from agents.db_saea import DBSAEAAgent
-from solver.nsga2_solver import run_surrogate_nsga2
+from solver.nsga3_solver import run_surrogate_nsga3
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
 from reward import hypervolume, pareto_front, reward_scheme_1, reward_scheme_2, reward_scheme_3
@@ -363,7 +363,7 @@ def _generate_single_offspring_pool(cfg_dict, archive_x, archive_y, nsga2_proble
         surrogate_name=surrogate_name,
     )
     nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
-    offspring_x, offspring_y = run_surrogate_nsga2(
+    offspring_x, offspring_y = run_surrogate_nsga3(
         gps=nsga2_models,
         surrogate=nsga2_surrogate,
         problem=nsga2_problem,

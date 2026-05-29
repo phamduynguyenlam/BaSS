@@ -25,3 +25,66 @@ iter 22 | front = 45 | HV = 0.711916 | reward = -0.004570 | reward_components: r
 iter 23 | front = 46 | HV = 0.711916 | reward = -0.004326 | reward_components: reward_total=-0.004326, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000087, fit_term=-0.004326
 iter 24 | front = 43 | HV = 0.711916 | reward = -0.004673 | reward_components: reward_total=-0.004673, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000093, fit_term=-0.004673
 iter 25 | front = 43 | HV = 0.711916 | reward = -0.004911 | reward_components: reward_total=-0.004911, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000098, fit_term=-0.004911
+iter 26 | front = 44 | HV = 0.711916 | reward = -0.005052 | reward_components: reward_total=-0.005052, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000101, fit_term=-0.005052
+iter 27 | front = 45 | HV = 0.711916 | reward = -0.004950 | reward_components: reward_total=-0.004950, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000099, fit_term=-0.004950
+iter 28 | front = 44 | HV = 0.711916 | reward = -0.005724 | reward_components: reward_total=-0.005724, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000114, fit_term=-0.005724
+iter 29 | front = 44 | HV = 0.711916 | reward = -0.005168 | reward_components: reward_total=-0.005168, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000103, fit_term=-0.005168
+iter 30 | front = 44 | HV = 0.711916 | reward = -0.005721 | reward_components: reward_total=-0.005721, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000114, fit_term=-0.005721
+iter 31 | front = 44 | HV = 0.711916 | reward = -0.005795 | reward_components: reward_total=-0.005795, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000116, fit_term=-0.005795
+iter 32 | front = 45 | HV = 0.711916 | reward = -0.005391 | reward_components: reward_total=-0.005391, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000108, fit_term=-0.005391
+iter 33 | front = 44 | HV = 0.711916 | reward = -0.005415 | reward_components: reward_total=-0.005415, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000108, fit_term=-0.005415
+iter 34 | front = 44 | HV = 0.711916 | reward = -0.005358 | reward_components: reward_total=-0.005358, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000107, fit_term=-0.005358
+iter 35 | front = 44 | HV = 0.711916 | reward = -0.004519 | reward_components: reward_total=-0.004519, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000090, fit_term=-0.004519
+iter 36 | front = 45 | HV = 0.711916 | reward = -0.004809 | reward_components: reward_total=-0.004809, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000096, fit_term=-0.004809
+iter 37 | front = 45 | HV = 0.711916 | reward = -0.004014 | reward_components: reward_total=-0.004014, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000080, fit_term=-0.004014
+iter 38 | front = 45 | HV = 0.711916 | reward = -0.004041 | reward_components: reward_total=-0.004041, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000081, fit_term=-0.004041
+iter 39 | front = 45 | HV = 0.711916 | reward = -0.004019 | reward_components: reward_total=-0.004019, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000080, fit_term=-0.004019
+iter 40 | front = 43 | HV = 0.711916 | reward = -0.004149 | reward_components: reward_total=-0.004149, prev_hv=0.711916, next_hv=0.711916, hv_gain=0.000000, hv_term=0.000000, fit_mse=0.000083, fit_term=-0.004149
+mean reward (40 steps) = -0.004939
+{
+  "problem": "DTLZ6",
+  "dim": 30,
+  "seed": 0,
+  "max_fe": 120,
+  "init_fe": 80,
+  "evolution_fe": 40,
+  "surrogate_model": "gp",
+  "candidate_solver": "nsga2",
+  "pseudo_front_only": false,
+  "reward_lambda": 10.0,
+  "lambda1": 25.0,
+  "lambda2": -50.0,
+  "reward_scheme": 3,
+  "agent_name": "disc",
+  "policy_name": "disc",
+  "agent_pth": null,
+  "random_model": true,
+  "reference_point": [
+    16.8257999420166,
+    16.91939926147461,
+    17.76460075378418
+  ],
+  "archive_size": 120,
+  "final_hv": 0.7119162465940607,
+  "mean_reward_40_steps": -0.004938595984640415,
+  "mean_reward_components": {
+    "fit_mse": 9.87719196928083e-05,
+    "fit_term": -0.004938595984640415,
+    "hv_gain": 0.0,
+    "hv_term": 0.0,
+    "next_hv": 0.7119162465940607,
+    "prev_hv": 0.7119162465940607,
+    "remaining_gap": 5038.059999188205,
+    "reward_total": -0.004938595984640415
+  },
+  "final_front_size": 43,
+  "plot_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\BaSS\\png\\test_disc_dtlz6_seed0.png",
+  "npy_paths": {
+    "archive_x": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\BaSS\\npy\\test_disc_dtlz6_seed0_archive_x.npy",
+    "archive_y": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\BaSS\\npy\\test_disc_dtlz6_seed0_archive_y.npy",
+    "final_front": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\BaSS\\npy\\test_disc_dtlz6_seed0_final_front.npy",
+    "fe_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\BaSS\\npy\\test_disc_dtlz6_seed0_fe_history.npy",
+    "hv_history": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\BaSS\\npy\\test_disc_dtlz6_seed0_hv_history.npy"
+  },
+  "test_log_path": "C:\\Users\\dauma\\OneDrive\\Documents\\HUST\\Research\\code\\BaSS\\testing_logs\\test_disc_dtlz6_gp_seed0_20260528_181050.txt"
+}

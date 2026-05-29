@@ -16,7 +16,7 @@ import numpy as np
 
 from agents.db_saea import DBSAEAAgent
 from agents.meta import Disc, DiscAF
-from solver.nsga2_solver import run_surrogate_nsga2
+from solver.nsga3_solver import run_surrogate_nsga3
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
 from reward import (
@@ -129,6 +129,15 @@ def resolve_agent_cls(agent_name):
     raise ValueError(f"Unsupported agent_name: {agent_name}")
 
 
+def output_agent_tag(agent_name: str) -> str:
+    name = str(agent_name).strip().lower()
+    if name == "disc":
+        return "bass"
+    if name == "disc_af":
+        return "bass_af"
+    return name
+
+
 def select_action_from_output(out):
     if "action" in out:
         return int(out["action"].reshape(-1)[0].item())
@@ -137,7 +146,7 @@ def select_action_from_output(out):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train DISC with surrogate-assisted environments.")
+    parser = argparse.ArgumentParser(description="Train BaSS with surrogate-assisted environments.")
     parser.add_argument("--problem", type=str, default="ZDT1")
     parser.add_argument("--dim", type=int, default=30)
     parser.add_argument("--epoch", type=int, default=None)
@@ -393,7 +402,7 @@ def _generate_single_offspring_pool(cfg_dict, archive_x, archive_y, nsga2_proble
         surrogate_name=surrogate_name,
     )
     nsga2_surrogate, nsga2_models = surrogate_or_models_for_nsga2(surrogate)
-    offspring_x, offspring_y = run_surrogate_nsga2(
+    offspring_x, offspring_y = run_surrogate_nsga3(
         gps=nsga2_models,
         surrogate=nsga2_surrogate,
         problem=nsga2_problem,
@@ -908,7 +917,7 @@ class DiscSAEAEnv:
     def _refresh_archive_surrogate_stats(self):
         surrogate = self._ensure_surrogate_ready()
         if surrogate is None:
-            raise RuntimeError("DISC archive ELA requires a fitted surrogate.")
+            raise RuntimeError("BaSS archive ELA requires a fitted surrogate.")
         self.archive_pred, self.archive_sigma = build_archive_surrogate_stats(
             archive_x=self.archive_x,
             archive_y=self.archive_y,
@@ -1091,6 +1100,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
     init_hv = float(env.init_hv)
     transitions = []
     reward_component_history: dict[str, list[float]] = {}
+    chosen_sur_steps_history: list[int] = []
 
     done = False
     while not done:
@@ -1114,6 +1124,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
         action = select_action_from_output(out)
         state_for_step = dict(state)
         state_for_step["current_ela"] = out["ela"].reshape(-1).detach().cpu().numpy().astype(np.float32)
+        chosen_sur_steps_history.append(int(Disc.action_to_surrogate_nsga_steps(action)))
         next_state, reward, done = env.step(action, state_for_step)
         for key, value in env.last_reward_breakdown.items():
             reward_component_history.setdefault(str(key), []).append(float(value))
@@ -1152,6 +1163,7 @@ def _rollout_episode_impl(state_dict_cpu, cfg_dict, problem_name, dim, seed, eps
         "transitions": transitions,
         "episode_reward": float(total_reward),
         "episode_steps": int(len(transitions)),
+        "chosen_sur_steps": [int(v) for v in chosen_sur_steps_history],
         "reward_components_mean": {
             key: float(np.mean(values)) for key, values in reward_component_history.items() if len(values) > 0
         },
@@ -1212,7 +1224,7 @@ def save_training_checkpoint(
     rs_tag = f"rs{int(cfg.reward_scheme)}"
     hidden_tag = f"h{int(cfg.hidden_dim)}"
     problem_tag = str(problem_name).lower()
-    agent_tag = str(getattr(cfg, "agent_name", "disc")).lower()
+    agent_tag = output_agent_tag(str(getattr(cfg, "agent_name", "disc")))
     file_prefix = f"{agent_tag}_problem_{problem_tag}_{rs_tag}_{hidden_tag}"
 
     if mean_reward > best_reward:
@@ -1306,8 +1318,8 @@ def train_disc_ddqn_ray(
     cfg_dict = cfg.__dict__.copy()
     os.makedirs("training_logs", exist_ok=True)
     log_subdir_map = {
-        "disc": "disc",
-        "disc_af": "disc_af",
+        "disc": "bass",
+        "disc_af": "bass_af",
         "db_saea": "db-saea",
     }
     log_dir = os.path.join(
@@ -1316,7 +1328,8 @@ def train_disc_ddqn_ray(
     )
     os.makedirs(log_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_prefix = f"{cfg.agent_name}_trainer" if cfg.agent_name != "disc" else "trainer"
+    output_tag = output_agent_tag(cfg.agent_name)
+    log_prefix = f"{output_tag}_trainer" if str(cfg.agent_name) != "disc" else "bass_trainer"
     log_path = os.path.join(
         log_dir,
         f"{log_prefix}_{cfg.heldout_problem.lower()}_set{cfg.training_set}_{ts}.txt",
@@ -1385,7 +1398,6 @@ def train_disc_ddqn_ray(
         f"surrogate={effective_surrogate_label(cfg)} | "
         f"sampling_backend={'ray' if use_ray else 'process_pool'} | "
         f"epochs={cfg.train_iters} | "
-        f"sur_steps={cfg.surrogate_nsga_steps} | "
         f"hybrid_nsga={int(bool(cfg.hybrid_nsga))} | "
         f"updates_per_epoch={cfg.updates_per_epoch} | "
         f"train_device={cfg.device} | "
@@ -1415,7 +1427,6 @@ def train_disc_ddqn_ray(
             f"envs_active={len(env_specs)}/{len(env_specs)} | "
             f"agent={cfg.agent_name} | "
             f"surrogate={effective_surrogate_label(cfg)} | "
-            f"sur_steps={cfg.surrogate_nsga_steps} | "
             f"eps={epsilon:.3f}"
         )
 
@@ -1480,6 +1491,7 @@ def train_disc_ddqn_ray(
                     "init_hv": [],
                     "final_hv": [],
                     "reward_components": {},
+                    "chosen_sur_steps": [],
                 },
             )
             ep_reward = float(result["episode_reward"])
@@ -1488,6 +1500,7 @@ def train_disc_ddqn_ray(
             bucket["reward_per_fe"].append(ep_reward / float(ep_steps))
             bucket["init_hv"].append(float(result["init_hv"]))
             bucket["final_hv"].append(float(result["final_hv"]))
+            bucket["chosen_sur_steps"].extend([int(v) for v in result.get("chosen_sur_steps", [])])
             for comp_key, comp_value in dict(result.get("reward_components_mean", {})).items():
                 bucket["reward_components"].setdefault(str(comp_key), []).append(float(comp_value))
         per_env_summaries = {}
@@ -1499,6 +1512,10 @@ def train_disc_ddqn_ray(
                 "mean_reward_per_fe": float(np.mean(stats["reward_per_fe"])),
                 "init_hv": float(np.mean(stats["init_hv"])),
                 "final_hv": float(np.mean(stats["final_hv"])),
+                "chosen_sur_steps": {
+                    int(step): int(sum(1 for v in stats["chosen_sur_steps"] if int(v) == int(step)))
+                    for step in sorted(set(int(v) for v in stats["chosen_sur_steps"]))
+                },
                 "reward_components": {
                     comp_key: float(np.mean(comp_values))
                     for comp_key, comp_values in sorted(stats["reward_components"].items())
@@ -1510,15 +1527,23 @@ def train_disc_ddqn_ray(
             if per_env_summaries
             else 0.0
         )
+        epoch_chosen_sur_steps: dict[int, int] = {}
+        for stats in per_env_summaries.values():
+            for step, count in stats["chosen_sur_steps"].items():
+                epoch_chosen_sur_steps[int(step)] = int(epoch_chosen_sur_steps.get(int(step), 0) + int(count))
         for key, stats in per_env_summaries.items():
             reward_component_str = ", ".join(
                 f"{comp_key}={comp_value:.4f}" for comp_key, comp_value in stats["reward_components"].items()
+            )
+            chosen_sur_steps_str = ", ".join(
+                f"{step}:{count}" for step, count in stats["chosen_sur_steps"].items()
             )
             log(
                 f"{key} epoch {epoch} done, "
                 f"mean reward/FE = {stats['mean_reward_per_fe']:.4f}, "
                 f"init HV = {stats['init_hv']:.6f}, "
                 f"final HV = {stats['final_hv']:.6f}"
+                + (f" | chosen_sur_steps: {chosen_sur_steps_str}" if chosen_sur_steps_str else "")
                 + (f" | reward_components: {reward_component_str}" if reward_component_str else "")
             )
         update_start_time = time.perf_counter()
@@ -1544,7 +1569,7 @@ def train_disc_ddqn_ray(
             log(
                 f"epoch {epoch} done | mean reward/FE = {mean_ep_reward:.4f} | "
                 f"set = {cfg.training_set} | heldout = {cfg.heldout_problem} | "
-            f"surrogate = {effective_surrogate_label(cfg)} | sur_steps = {cfg.surrogate_nsga_steps} | "
+            f"surrogate = {effective_surrogate_label(cfg)} | "
                 f"workers = {actual_num_workers} | replay = {len(replay)} | "
                 f"reward_scheme = {cfg.reward_scheme} | policy = {cfg.policy_mode} | update = skipped"
                 f" | update_time_sec = {time.perf_counter() - update_start_time:.3f}"
@@ -1626,7 +1651,7 @@ def train_disc_ddqn_ray(
             f"heldout={cfg.heldout_problem} | "
             f"envs_active={len(env_specs)}/{len(env_specs)} | "
             f"surrogate={effective_surrogate_label(cfg)} | "
-            f"sur_steps={cfg.surrogate_nsga_steps} | "
+            f"chosen_sur_steps={epoch_chosen_sur_steps} | "
             f"updates={cfg.updates_per_epoch} | "
             f"update_time_sec={update_elapsed:.3f} | "
             f"eps={epsilon:.3f} | "
@@ -1653,7 +1678,8 @@ def train_disc_ddqn_ray(
         log(
             f"epoch {epoch} done | mean reward/FE = {mean_ep_reward:.4f} | "
             f"set = {cfg.training_set} | heldout = {cfg.heldout_problem} | "
-            f"surrogate = {effective_surrogate_label(cfg)} | sur_steps = {cfg.surrogate_nsga_steps} | "
+            f"surrogate = {effective_surrogate_label(cfg)} | "
+            f"chosen_sur_steps = {epoch_chosen_sur_steps} | "
             f"workers = {actual_num_workers} | replay = {len(replay)} | "
             f"reward_scheme = {cfg.reward_scheme} | policy = {cfg.policy_mode} | "
             f"updates = {len(update_metrics_list)} | "

@@ -67,8 +67,9 @@ def default_test_log_path(args: argparse.Namespace, *, agent_name: str) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     compare_name = resolve_compare_infill_name(args)
     compare_tag = "" if compare_name is None else f"_compare_{compare_name}"
+    output_tag = output_agent_tag(agent_name)
     stem = (
-        f"test_{str(agent_name).lower()}_{str(args.problem).lower()}_"
+        f"test_{output_tag}_{str(args.problem).lower()}_"
         f"{str(args.surrogate_model).lower()}_seed{int(args.seed)}{compare_tag}_{timestamp}.txt"
     )
     return Path("testing_logs") / stem
@@ -174,7 +175,7 @@ def compute_test_reward(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run DISC-guided surrogate-assisted optimization with 80 LHS init + 40 evolution steps."
+        description="Run BaSS-guided surrogate-assisted optimization with 80 LHS init + 40 evolution steps."
     )
     parser.add_argument("--problem", type=str, default="ZDT1", choices=SUPPORTED_PROBLEMS)
     parser.add_argument("--dim", type=int, default=30)
@@ -208,7 +209,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--compare_infill", type=str, default=None)
     parser.add_argument("--compare_algo", type=str, default=None, choices=["db_saea"])
     parser.add_argument("--compare_agent_pth", type=str, default=None)
-    parser.add_argument("--solver", type=str, default="nsga2", choices=["nsga2", "nsga3", "moead", "usemo"])
+    parser.add_argument("--solver", type=str, default="nsga3", choices=["nsga2", "nsga3", "moead", "usemo"])
     parser.add_argument("--pseudo_front_only", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--output_json", type=str, default=None)
@@ -248,6 +249,15 @@ def resolve_agent_cls(agent_name: str):
     if name == "db_saea":
         return DBSAEAAgent
     raise ValueError(f"Unsupported agent_name: {agent_name}")
+
+
+def output_agent_tag(agent_name: str) -> str:
+    name = str(agent_name).strip().lower()
+    if name == "disc":
+        return "bass"
+    if name == "disc_af":
+        return "bass_af"
+    return name
 
 
 def latin_hypercube_sample(
@@ -395,7 +405,7 @@ def run_surrogate_optimizer(
     nsga2_models: list[Any] | None,
     step: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    solver_name = str(getattr(args, "solver", "nsga2")).lower()
+    solver_name = str(getattr(args, "solver", "nsga3")).lower()
     if solver_name == "nsga2":
         solver = run_surrogate_nsga2
         return solver(
@@ -467,7 +477,7 @@ def _generate_single_offspring_pool(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     local_args = argparse.Namespace(**vars(args))
     local_args.surrogate_nsga_steps = int(resolve_surrogate_nsga_steps(args, surrogate_name))
-    solver_name = str(getattr(args, "solver", "nsga2")).lower()
+    solver_name = str(getattr(args, "solver", "nsga3")).lower()
     if solver_name == "usemo":
         offspring_x, offspring_pred, offspring_sigma = run_surrogate_usemo(
             problem=nsga_problem,
@@ -516,7 +526,7 @@ def generate_offspring_pool(
     archive_y: np.ndarray,
     step: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
-    if str(getattr(args, "solver", "nsga2")).lower() == "usemo" and (
+    if str(getattr(args, "solver", "nsga3")).lower() == "usemo" and (
         bool(getattr(args, "hybrid_nsga", False)) or bool(getattr(args, "hybrid_nsga_gp", False))
     ):
         raise ValueError("USEMO solver does not support --hybrid_nsga or --hybrid_nsga_gp.")
@@ -798,6 +808,7 @@ def run_policy_rollout(
     prev_ela = np.full((int(getattr(disc, "hidden_dim", getattr(args, "hidden_dim", 64))),), np.nan, dtype=np.float32)
 
     for step in range(n_evo_steps):
+        chosen_steps = None
         offspring_x, offspring_pred, offspring_sigma, offspring_groups = generate_offspring_pool(
             args=args,
             nsga_problem=nsga2_problem,
@@ -808,7 +819,7 @@ def run_policy_rollout(
 
         if policy_name.lower() == "disc":
             if disc is None:
-                raise ValueError("DISC rollout requires a built disc model.")
+                raise ValueError("BaSS rollout requires a built disc model.")
             progress = float(step) / float(max(n_evo_steps - 1, 1))
             state_surrogate = build_surrogate(args, archive_x, archive_y)
             archive_pred, archive_sigma = build_archive_surrogate_stats(
@@ -971,6 +982,7 @@ def run_policy_rollout(
         logger(
             f"{prefix}iter {record.step} | front = {front_size} | "
             f"HV = {record.hv:.6f} | reward = {record.reward:.6f}"
+            + (f" | surrogate_nsga_steps = {int(chosen_steps)}" if chosen_steps is not None else "")
             + (f" | reward_components: {reward_component_str}" if reward_component_str else "")
         )
         if bool(getattr(args, "debug", False)):
@@ -1008,7 +1020,7 @@ def run_policy_rollout(
         "init_fe": int(args.init_fe),
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
-        "candidate_solver": str(getattr(args, "solver", "nsga2")).lower(),
+        "candidate_solver": str(getattr(args, "solver", "nsga3")).lower(),
         "pseudo_front_only": bool(getattr(args, "pseudo_front_only", False)),
         "reward_lambda": float(args.reward_lambda),
         "lambda1": float(args.lambda1),
@@ -1086,7 +1098,7 @@ def plot_results(
     archive_y: np.ndarray,
     true_pareto: np.ndarray | None,
 ) -> str:
-    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
+    agent_tag = output_agent_tag(str(getattr(args, "agent_name", "disc")))
     plot_path = args.plot_path
     if plot_path is None:
         plot_path = str(Path("png") / f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}.png")
@@ -1249,7 +1261,7 @@ def save_npy_outputs(
 ) -> dict[str, str]:
     out_dir = Path("npy")
     out_dir.mkdir(parents=True, exist_ok=True)
-    agent_tag = str(getattr(args, "agent_name", "disc")).lower()
+    agent_tag = output_agent_tag(str(getattr(args, "agent_name", "disc")))
     stem = f"test_{agent_tag}_{args.problem.lower()}_seed{int(args.seed)}"
 
     paths = {
@@ -1318,7 +1330,7 @@ def main(agent_name: str = "disc") -> None:
         agent_load_sec = time.perf_counter() - agent_load_started_at
         if bool(args.debug):
             log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
-            log(f"candidate_solver = {str(getattr(args, 'solver', 'nsga2')).lower()}")
+            log(f"candidate_solver = {str(getattr(args, 'solver', 'nsga3')).lower()}")
             log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
             log(f"hybrid_nsga = {int(bool(args.hybrid_nsga))}")
             log(f"hybrid_nsga_gp = {int(bool(getattr(args, 'hybrid_nsga_gp', False)))}")
@@ -1383,7 +1395,7 @@ def main(agent_name: str = "disc") -> None:
                 baseline_fe_history=list(infill_summary["fe_history"]),
                 baseline_hv_history=list(infill_summary["hv_history"]),
                 baseline_archive_y=infill_archive_y,
-                primary_label="DISC",
+                primary_label="BaSS",
                 baseline_label=str(compare_label),
                 true_pareto=true_pareto,
             )
@@ -1395,7 +1407,7 @@ def main(agent_name: str = "disc") -> None:
                 "agent_name": args.agent_name,
                 "compare_infill": compare_infill_name,
                 "reward_scheme": int(reward_scheme_id),
-                "disc": disc_summary,
+                "bass": disc_summary,
                 "infill": infill_summary,
                 "compare_plot_path": compare_plot_path,
                 "test_log_path": str(test_log_path.resolve()),
@@ -1431,7 +1443,7 @@ def main(agent_name: str = "disc") -> None:
                 baseline_fe_history=list(baseline_summary["fe_history"]),
                 baseline_hv_history=list(baseline_summary["hv_history"]),
                 baseline_archive_y=baseline_archive_y,
-                primary_label="DISC",
+                primary_label="BaSS",
                 baseline_label=str(compare_algo_name).upper(),
                 true_pareto=true_pareto,
             )
@@ -1443,7 +1455,7 @@ def main(agent_name: str = "disc") -> None:
                 "agent_name": args.agent_name,
                 "compare_algo": compare_algo_name,
                 "reward_scheme": int(reward_scheme_id),
-                "disc": disc_summary,
+                "bass": disc_summary,
                 "baseline": baseline_summary,
                 "compare_plot_path": compare_plot_path,
                 "test_log_path": str(test_log_path.resolve()),
@@ -1459,7 +1471,7 @@ def main(agent_name: str = "disc") -> None:
         if compare_infill_name is not None:
             log(
                 f"mean reward ({n_evo_steps} steps) | "
-                f"DISC = {summary['disc']['mean_reward_40_steps']:.6f} | "
+                f"BaSS = {summary['bass']['mean_reward_40_steps']:.6f} | "
                 f"{compare_label} = {summary['infill']['mean_reward_40_steps']:.6f}"
             )
             log(
@@ -1471,7 +1483,7 @@ def main(agent_name: str = "disc") -> None:
                         "surrogate_model": summary["surrogate_model"],
                         "agent_name": summary["agent_name"],
                         "compare_infill": compare_infill_name,
-                        "disc_final_hv": summary["disc"]["final_hv"],
+                        "bass_final_hv": summary["bass"]["final_hv"],
                         "infill_final_hv": summary["infill"]["final_hv"],
                         "compare_plot_path": summary["compare_plot_path"],
                         "test_log_path": summary["test_log_path"],
@@ -1482,7 +1494,7 @@ def main(agent_name: str = "disc") -> None:
         elif compare_algo_name is not None:
             log(
                 f"mean reward ({n_evo_steps} steps) | "
-                f"DISC = {summary['disc']['mean_reward_40_steps']:.6f} | "
+                f"BaSS = {summary['bass']['mean_reward_40_steps']:.6f} | "
                 f"{str(compare_algo_name).upper()} = {summary['baseline']['mean_reward_40_steps']:.6f}"
             )
             log(
@@ -1494,7 +1506,7 @@ def main(agent_name: str = "disc") -> None:
                         "surrogate_model": summary["surrogate_model"],
                         "agent_name": summary["agent_name"],
                         "compare_algo": compare_algo_name,
-                        "disc_final_hv": summary["disc"]["final_hv"],
+                        "bass_final_hv": summary["bass"]["final_hv"],
                         "baseline_final_hv": summary["baseline"]["final_hv"],
                         "compare_plot_path": summary["compare_plot_path"],
                         "test_log_path": summary["test_log_path"],
