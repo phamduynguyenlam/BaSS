@@ -16,6 +16,14 @@ import numpy as np
 
 from agents.bass import Bass, BassAF
 from agents.db_saea import DBSAEAAgent
+from infill import (
+    EPDIExploitation,
+    EPDIExploration,
+    ExpectedHypervolumeImprovement,
+    NDA,
+    NDPBIConvergence,
+    NDPBIDiversity,
+)
 from solver.nsga3_solver import run_surrogate_nsga3
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
@@ -41,6 +49,17 @@ from surrogate.surrogate_model import (
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+
+INFILL_CRITERION_CHOICES = [
+    "uncertainty",
+    "ehvi",
+    "nd_a",
+    "nd_pbi_convergence",
+    "nd_pbi_diversity",
+    "epdi_exploitation",
+    "epdi_exploration",
+]
 
 
 @dataclass
@@ -77,6 +96,8 @@ class TrainConfig:
     reward_lambda: float = 10.0
     reward_lambda1: float = 25.0
     reward_lambda2: float = -50.0
+    reward_norm: bool = False
+    infill: str = "uncertainty"
     policy_mode: str = "epsilon_greedy"
     training_set: int = 1
     heldout_problem: str = "ZDT1"
@@ -144,6 +165,69 @@ def output_agent_tag(agent_name: str) -> str:
     return name
 
 
+def normalize_infill_name(name: str | None) -> str:
+    text = "" if name is None else str(name).strip().lower()
+    if text == "":
+        return "uncertainty"
+    return text.replace("-", "_")
+
+
+def build_infill_criterion(name: str, *, ref_point: np.ndarray):
+    key = normalize_infill_name(name)
+    if key == "ehvi":
+        return ExpectedHypervolumeImprovement(ref_point=ref_point, n_samples=64)
+    if key == "nd_a":
+        return NDA()
+    if key == "nd_pbi_convergence":
+        return NDPBIConvergence()
+    if key == "nd_pbi_diversity":
+        return NDPBIDiversity()
+    if key == "epdi_exploitation":
+        return EPDIExploitation()
+    if key == "epdi_exploration":
+        return EPDIExploration()
+    raise ValueError(f"Unsupported infill: {name}")
+
+
+def select_candidate_index_by_infill(
+    *,
+    infill_name: str,
+    archive_y: np.ndarray,
+    candidate_mean: np.ndarray,
+    candidate_std: np.ndarray,
+    ref_point: np.ndarray,
+    seed: int,
+) -> int:
+    key = normalize_infill_name(infill_name)
+    candidate_mean_arr = np.asarray(candidate_mean, dtype=np.float32)
+    candidate_std_arr = np.asarray(candidate_std, dtype=np.float32)
+    if key == "uncertainty":
+        sigma_scores = candidate_std_arr
+        if sigma_scores.ndim == 1:
+            sigma_scores = sigma_scores.reshape(-1, 1)
+        sigma_scores = sigma_scores.mean(axis=1)
+        pred_front = pareto_front(candidate_mean_arr)
+        keep = []
+        for idx in range(int(candidate_mean_arr.shape[0])):
+            row = candidate_mean_arr[idx]
+            matches = np.isclose(pred_front, row[None, :], atol=1e-6, rtol=0.0)
+            if bool(np.any(np.all(matches, axis=1))):
+                keep.append(int(idx))
+        if len(keep) == 0:
+            keep = list(range(int(candidate_mean_arr.shape[0])))
+        keep_idx = np.asarray(keep, dtype=np.int64)
+        return int(keep_idx[int(np.argmax(sigma_scores[keep_idx]))])
+
+    criterion = build_infill_criterion(key, ref_point=np.asarray(ref_point, dtype=np.float32))
+    selected_idx, _ = criterion.select_index(
+        archive_y=np.asarray(archive_y, dtype=np.float32),
+        candidate_mean=candidate_mean_arr,
+        candidate_std=candidate_std_arr,
+        seed=int(seed),
+    )
+    return int(selected_idx)
+
+
 def soft_update_target_network(target_agent, online_agent, tau: float) -> None:
     tau_value = float(tau)
     with torch.no_grad():
@@ -171,6 +255,8 @@ def parse_args():
     parser.add_argument("--reward_lambda", type=float, default=10.0)
     parser.add_argument("--reward_lambda1", type=float, default=25.0)
     parser.add_argument("--reward_lambda2", type=float, default=-50.0)
+    parser.add_argument("--reward_norm", action="store_true")
+    parser.add_argument("--infill", type=str, default="uncertainty", choices=INFILL_CRITERION_CHOICES)
     parser.add_argument("--surrogate_model", type=str, default="gp", choices=["gp", "kan", "tabpfn"])
     parser.add_argument("--training_set", type=int, default=1, choices=[1, 2, 3])
     parser.add_argument("--num_workers", type=int, default=None)
@@ -953,21 +1039,14 @@ class DiscSAEAEnv:
         self.offspring_sigma = np.asarray(offspring_sigma, dtype=np.float32)
 
     def _select_candidate_index(self):
-        scores = np.asarray(self.offspring_sigma, dtype=np.float32)
-        if scores.ndim == 1:
-            scores = scores.reshape(-1, 1)
-        mean_scores = scores.mean(axis=1)
-        pred_front = pareto_front(np.asarray(self.offspring_y, dtype=np.float32))
-        keep = []
-        for idx in range(int(self.offspring_y.shape[0])):
-            row = self.offspring_y[idx]
-            matches = np.isclose(pred_front, row[None, :], atol=1e-6, rtol=0.0)
-            if bool(np.any(np.all(matches, axis=1))):
-                keep.append(int(idx))
-        if len(keep) == 0:
-            keep = list(range(int(self.offspring_y.shape[0])))
-        keep_idx = np.asarray(keep, dtype=np.int64)
-        return int(keep_idx[int(np.argmax(mean_scores[keep_idx]))])
+        return select_candidate_index_by_infill(
+            infill_name=str(self.cfg.get("infill", "uncertainty")),
+            archive_y=np.asarray(self.archive_y, dtype=np.float32),
+            candidate_mean=np.asarray(self.offspring_y, dtype=np.float32),
+            candidate_std=np.asarray(self.offspring_sigma, dtype=np.float32),
+            ref_point=np.asarray(self.ref_point, dtype=np.float32),
+            seed=int(self.seed) + int(self.t),
+        )
 
     def _build_state(self):
         return {
@@ -1221,6 +1300,41 @@ def summarize_parallel_rollout(results):
     }
 
 
+def normalize_transition_rewards_by_env(results):
+    if not results:
+        return results
+
+    reward_index = 11
+    eps = 1e-8
+    env_rewards: dict[str, list[float]] = {}
+    for result in results:
+        key = str(result["env_key"])
+        env_rewards.setdefault(key, []).extend(
+            float(transition[reward_index]) for transition in result.get("transitions", [])
+        )
+
+    env_stats = {
+        key: (float(np.mean(values)), float(np.std(values)))
+        for key, values in env_rewards.items()
+        if len(values) > 0
+    }
+
+    normalized_results = []
+    for result in results:
+        mean_value, std_value = env_stats.get(str(result["env_key"]), (0.0, 1.0))
+        denom = std_value if std_value > eps else 1.0
+        updated_result = dict(result)
+        normalized_transitions = []
+        for transition in result.get("transitions", []):
+            transition_list = list(transition)
+            reward_value = float(transition_list[reward_index])
+            transition_list[reward_index] = float((reward_value - mean_value) / denom)
+            normalized_transitions.append(tuple(transition_list))
+        updated_result["transitions"] = normalized_transitions
+        normalized_results.append(updated_result)
+    return normalized_results
+
+
 def save_training_checkpoint(
     agent,
     cfg,
@@ -1278,6 +1392,8 @@ def train_disc_ddqn_ray(
     reward_lambda=10.0,
     reward_lambda1=25.0,
     reward_lambda2=-50.0,
+    reward_norm=False,
+    infill="uncertainty",
     surrogate_model="gp",
     training_set=1,
     num_workers=None,
@@ -1301,6 +1417,8 @@ def train_disc_ddqn_ray(
     cfg.reward_lambda = float(reward_lambda)
     cfg.reward_lambda1 = float(reward_lambda1)
     cfg.reward_lambda2 = float(reward_lambda2)
+    cfg.reward_norm = bool(reward_norm)
+    cfg.infill = normalize_infill_name(infill)
     cfg.surrogate_model = str(surrogate_model).lower()
     cfg.training_set = int(training_set)
     cfg.heldout_problem = str(problem_name).upper()
@@ -1320,6 +1438,11 @@ def train_disc_ddqn_ray(
         raise ValueError(
             f"Unsupported surrogate_model: {cfg.surrogate_model}. "
             "Expected one of {'gp', 'gp2', 'kan', 'tabpfn'}."
+        )
+    if cfg.infill not in INFILL_CRITERION_CHOICES:
+        raise ValueError(
+            f"Unsupported infill: {cfg.infill}. "
+            f"Expected one of {INFILL_CRITERION_CHOICES}."
         )
     env_specs = build_training_env_specs(cfg.heldout_problem, cfg.training_set)
     if int(cfg.num_workers) <= 0:
@@ -1407,6 +1530,8 @@ def train_disc_ddqn_ray(
         f"reward_lambda={cfg.reward_lambda:.4f} | "
         f"reward_lambda1={cfg.reward_lambda1:.4f} | "
         f"reward_lambda2={cfg.reward_lambda2:.4f} | "
+        f"reward_norm={int(bool(cfg.reward_norm))} | "
+        f"infill={cfg.infill} | "
         f"agent={cfg.agent_name} | "
         f"policy={cfg.policy_mode} | "
         f"surrogate={effective_surrogate_label(cfg)} | "
@@ -1481,6 +1606,8 @@ def train_disc_ddqn_ray(
             results = ray_mod.get(futures)
         else:
             results = [f.result() for f in futures]
+        if bool(cfg.reward_norm):
+            results = normalize_transition_rewards_by_env(results)
         parallel_stats = summarize_parallel_rollout(results)
         if parallel_stats is not None:
             log(
@@ -1494,6 +1621,7 @@ def train_disc_ddqn_ray(
                 f"min_task_sec={parallel_stats['min_task_sec']:.3f} | "
                 f"max_task_sec={parallel_stats['max_task_sec']:.3f} | "
                 f"parallelism_est={parallel_stats['parallelism_est']:.2f}"
+                f" | reward_norm={int(bool(cfg.reward_norm))}"
             )
 
         per_env_stats = {}
@@ -1743,6 +1871,8 @@ if __name__ == "__main__":
         reward_lambda=float(args.reward_lambda),
         reward_lambda1=float(args.reward_lambda1),
         reward_lambda2=float(args.reward_lambda2),
+        reward_norm=bool(args.reward_norm),
+        infill=str(args.infill),
         surrogate_model=str(args.surrogate_model),
         training_set=int(args.training_set),
         num_workers=args.num_workers,

@@ -50,6 +50,17 @@ from surrogate.surrogate_model import (
 )
 
 
+INFILL_CRITERION_CHOICES = [
+    "uncertainty",
+    "ehvi",
+    "nd_a",
+    "nd_pbi_convergence",
+    "nd_pbi_diversity",
+    "epdi_exploitation",
+    "epdi_exploration",
+]
+
+
 def make_test_logger(log_path: Path):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fp = log_path.open("w", encoding="utf-8")
@@ -79,9 +90,16 @@ def resolve_compare_infill_name(args: argparse.Namespace) -> str | None:
     raw_value = getattr(args, "compare_infill", None)
     if raw_value is None:
         return None
-    text = str(raw_value).strip().lower()
+    text = normalize_infill_name(str(raw_value))
     if text == "":
         return None
+    return text
+
+
+def normalize_infill_name(name: str | None) -> str:
+    text = "" if name is None else str(name).strip().lower()
+    if text == "":
+        return ""
     return text.replace("-", "_")
 
 
@@ -94,12 +112,12 @@ def compare_infill_display_name(name: str) -> str:
         "epdi_exploitation": "EPDI-Exploitation",
         "epdi_exploration": "EPDI-Exploration",
     }
-    key = str(name).strip().lower().replace("-", "_")
+    key = normalize_infill_name(name)
     return display_map.get(key, key.upper())
 
 
-def build_compare_infill_criterion(name: str, *, ref_point: np.ndarray):
-    key = str(name).strip().lower().replace("-", "_")
+def build_infill_criterion(name: str, *, ref_point: np.ndarray):
+    key = normalize_infill_name(name)
     if key == "ehvi":
         return ExpectedHypervolumeImprovement(ref_point=ref_point, n_samples=64)
     if key == "nd_a":
@@ -112,7 +130,41 @@ def build_compare_infill_criterion(name: str, *, ref_point: np.ndarray):
         return EPDIExploitation()
     if key == "epdi_exploration":
         return EPDIExploration()
-    raise ValueError(f"Unsupported compare_infill: {name}")
+    raise ValueError(f"Unsupported infill: {name}")
+
+
+def build_compare_infill_criterion(name: str, *, ref_point: np.ndarray):
+    return build_infill_criterion(name, ref_point=ref_point)
+
+
+def select_candidate_index_by_infill(
+    *,
+    infill_name: str,
+    archive_y: np.ndarray,
+    candidate_mean: np.ndarray,
+    candidate_std: np.ndarray,
+    ref_point: np.ndarray,
+    seed: int,
+) -> int:
+    key = normalize_infill_name(infill_name)
+    candidate_mean_arr = np.asarray(candidate_mean, dtype=np.float32)
+    candidate_std_arr = np.asarray(candidate_std, dtype=np.float32)
+    if key == "uncertainty":
+        sigma_scores = candidate_std_arr
+        if sigma_scores.ndim == 1:
+            sigma_scores = sigma_scores.reshape(-1, 1)
+        sigma_scores = sigma_scores.mean(axis=1)
+        pseudo_idx = get_pseudo_front_indices(candidate_mean_arr)
+        return int(pseudo_idx[int(np.argmax(sigma_scores[pseudo_idx]))])
+
+    criterion = build_infill_criterion(key, ref_point=np.asarray(ref_point, dtype=np.float32))
+    selected_idx, _ = criterion.select_index(
+        archive_y=np.asarray(archive_y, dtype=np.float32),
+        candidate_mean=candidate_mean_arr,
+        candidate_std=candidate_std_arr,
+        seed=int(seed),
+    )
+    return int(selected_idx)
 
 
 def resolve_test_reward_scheme(args: argparse.Namespace) -> int:
@@ -206,6 +258,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beta", type=float, default=1.0)
     parser.add_argument("--hybrid_nsga", action="store_true")
     parser.add_argument("--hybrid_nsga_gp", action="store_true")
+    parser.add_argument("--infill", type=str, default="uncertainty", choices=INFILL_CRITERION_CHOICES)
     parser.add_argument("--compare_infill", type=str, default=None)
     parser.add_argument("--compare_algo", type=str, default=None, choices=["db_saea"])
     parser.add_argument("--compare_agent_pth", type=str, default=None)
@@ -859,12 +912,14 @@ def run_policy_rollout(
                 archive_y=archive_y,
                 step=step,
             )
-            sigma_scores = np.asarray(offspring_sigma, dtype=np.float32)
-            if sigma_scores.ndim == 1:
-                sigma_scores = sigma_scores.reshape(-1, 1)
-            sigma_scores = sigma_scores.mean(axis=1)
-            pseudo_idx = get_pseudo_front_indices(offspring_pred)
-            selected_idx = int(pseudo_idx[int(np.argmax(sigma_scores[pseudo_idx]))])
+            selected_idx = select_candidate_index_by_infill(
+                infill_name=str(getattr(args, "infill", "uncertainty")),
+                archive_y=np.asarray(archive_y, dtype=np.float32),
+                candidate_mean=np.asarray(offspring_pred, dtype=np.float32),
+                candidate_std=np.asarray(offspring_sigma, dtype=np.float32),
+                ref_point=np.asarray(ref_point, dtype=np.float32),
+                seed=int(args.seed) + int(step),
+            )
         elif policy_name.lower() == "db_saea":
             if db_saea_agent is None:
                 raise ValueError("DB-SAEA rollout requires a built db_saea model.")
@@ -1025,6 +1080,7 @@ def run_policy_rollout(
         "evolution_fe": n_evo_steps,
         "surrogate_model": surrogate_model_name(args),
         "candidate_solver": str(getattr(args, "solver", "nsga3")).lower(),
+        "infill": normalize_infill_name(getattr(args, "infill", "uncertainty")),
         "pseudo_front_only": bool(getattr(args, "pseudo_front_only", False)),
         "reward_lambda": float(args.reward_lambda),
         "lambda1": float(args.lambda1),
@@ -1335,6 +1391,7 @@ def main(agent_name: str = "bass") -> None:
         if bool(args.debug):
             log(f"reference_point = {ref_point.tolist()} (from ref_points_hv.py)")
             log(f"candidate_solver = {str(getattr(args, 'solver', 'nsga3')).lower()}")
+            log(f"infill = {normalize_infill_name(getattr(args, 'infill', 'uncertainty'))}")
             log(f"nsga_af = {str(args.nsga_af).lower()} | beta = {float(args.beta):.4f}")
             log(f"hybrid_nsga = {int(bool(args.hybrid_nsga))}")
             log(f"hybrid_nsga_gp = {int(bool(getattr(args, 'hybrid_nsga_gp', False)))}")
