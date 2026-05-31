@@ -1185,7 +1185,6 @@ def train_db_saea_ddqn_ray(
     os.makedirs("training_logs", exist_ok=True)
     log_subdir_map = {
         "disc": "disc",
-        "disc_af": "disc_af",
         "db_saea": "db-saea",
     }
     log_dir = os.path.join(

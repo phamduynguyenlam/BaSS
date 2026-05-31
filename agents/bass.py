@@ -371,4 +371,3 @@ class BaSSAgent(nn.Module):
 
 
 Bass = BaSSAgent
-BassAF = BaSSAgent

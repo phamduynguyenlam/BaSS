@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-from agents.bass import Bass, BassAF
+from agents.bass import Bass
 from agents.db_saea import DBSAEAAgent
 from infill import (
     EPDIExploitation,
@@ -145,12 +145,8 @@ def resolve_agent_cls(agent_name):
     name = str(agent_name).strip().lower()
     if name == "bass":
         return Bass
-    if name == "bass_af":
-        return BassAF
     if name == "disc":
         return Bass
-    if name == "disc_af":
-        return BassAF
     if name == "db_saea":
         return DBSAEAAgent
     raise ValueError(f"Unsupported agent_name: {agent_name}")
@@ -160,8 +156,6 @@ def output_agent_tag(agent_name: str) -> str:
     name = str(agent_name).strip().lower()
     if name == "disc":
         return "bass"
-    if name == "disc_af":
-        return "bass_af"
     return name
 
 
@@ -1454,9 +1448,7 @@ def train_disc_ddqn_ray(
     os.makedirs("training_logs", exist_ok=True)
     log_subdir_map = {
         "bass": "bass",
-        "bass_af": "bass_af",
         "disc": "bass",
-        "disc_af": "bass_af",
         "db_saea": "db-saea",
     }
     log_dir = os.path.join(

@@ -17,7 +17,7 @@ from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.problem import Problem
 from pymoo.termination import get_termination
 
-from agents.meta import Disc
+from agents.bass import Bass as Disc
 from surrogate.surrogate_model import TabPFNMinMaxSurrogate, predict_multi_context
 from trainer import (
     DiscSAEAEnv,

@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from agents.meta import Disc
+from agents.bass import Bass as Disc
 from infill import (
     EPDIExploitation,
     EPDIExploration,

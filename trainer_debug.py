@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
-from agents.meta import Disc
+from agents.bass import Bass as Disc
 from solver.nsga2_solver import run_surrogate_nsga2
 from problem.problem import make_problem
 from ref_points_hv import get_reference_point
